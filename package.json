@@ -15,7 +15,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/bobfrankston/gcal.git"
+    "url": "git+https://github.com/BobFrankston/gcal.git"
   },
   "scripts": {
     "check": "tsc --noEmit",
