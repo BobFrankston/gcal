@@ -242,10 +242,12 @@ Options:
   -v, -verbose             Show event IDs and links
 
 Examples:
-  gcal meeting.ics                   Import ICS file
-  gcal list                          List next 10 events
+  gcal meeting.ics                        Import ICS file
+  gcal list                               List next 10 events
   gcal add "Dentist" "Friday 3pm" "1h"
-  gcal -defaultUser bob@gmail.com    Set default user
+  gcal add "Lunch" "1/14/2026 12:00" "1h"
+  gcal add "Meeting" "tomorrow 10:00"
+  gcal -defaultUser bob@gmail.com         Set default user
 
 File Association (Windows):
   assoc .ics=icsfile

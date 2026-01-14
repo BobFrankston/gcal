@@ -259,6 +259,34 @@ export function parseDateTime(input: string): Date {
         return d;
     }
 
+    // Handle explicit date/time formats: "MM/DD/YYYY HH:mm" or "YYYY-MM-DD HH:mm"
+    const dateTimeMatch = input.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2})$/);
+    if (dateTimeMatch) {
+        const [, month, day, year, hour, min] = dateTimeMatch;
+        const d = new Date(parseInt(year), parseInt(month) - 1, parseInt(day), parseInt(hour), parseInt(min));
+        if (!isNaN(d.getTime())) {
+            return d;
+        }
+    }
+
+    const isoDateTimeMatch = input.match(/^(\d{4})-(\d{1,2})-(\d{1,2})\s+(\d{1,2}):(\d{2})$/);
+    if (isoDateTimeMatch) {
+        const [, year, month, day, hour, min] = isoDateTimeMatch;
+        const d = new Date(parseInt(year), parseInt(month) - 1, parseInt(day), parseInt(hour), parseInt(min));
+        if (!isNaN(d.getTime())) {
+            return d;
+        }
+    }
+
+    // Handle time only (HH:mm) - assume today
+    const timeMatch = input.match(/^(\d{1,2}):(\d{2})$/);
+    if (timeMatch) {
+        const [, hour, min] = timeMatch;
+        const d = new Date(now);
+        d.setHours(parseInt(hour), parseInt(min), 0, 0);
+        return d;
+    }
+
     // Try native Date parsing
     const parsed = new Date(input);
     if (!isNaN(parsed.getTime())) {
