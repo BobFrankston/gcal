@@ -22,7 +22,8 @@
     "prerelease:local": "git add -A && (git diff-index --quiet HEAD || git commit -m \"Pre-release commit\")",
     "preversion": "npm run check && git add -A",
     "postversion": "git push && git push --tags",
-    "release": "npm run prerelease:local && npm version patch && npm publish --access public"
+    "release": "npm run prerelease:local && npm version patch && npm publish --access public",
+    "release:local": "npm run prerelease:local && npm version patch && npm publish --access public --ignore-scripts"
   },
   "keywords": [
     "google",
