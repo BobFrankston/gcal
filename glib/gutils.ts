@@ -163,16 +163,42 @@ export function resolveUser(cliUser: string, setAsDefault = false): string {
     process.exit(1);
 }
 
-/** Format datetime for display */
+/** Format datetime for display - yyyy-mm-dd HH:mm format */
 export function formatDateTime(dt: { date?: string; dateTime?: string; timeZone?: string }): string {
     if (dt.date) {
-        return dt.date;  // All-day event
+        return dt.date;  // Already yyyy-mm-dd
     }
     if (dt.dateTime) {
         const d = new Date(dt.dateTime);
-        return d.toLocaleString();
+        const yyyy = d.getFullYear();
+        const mm = String(d.getMonth() + 1).padStart(2, '0');
+        const dd = String(d.getDate()).padStart(2, '0');
+        const hh = String(d.getHours()).padStart(2, '0');
+        const min = String(d.getMinutes()).padStart(2, '0');
+        return `${yyyy}-${mm}-${dd} ${hh}:${min}`;
     }
     return '(no time)';
+}
+
+/** Format duration in hours (e.g., "1.5 hrs", "2 hrs", "30 min") */
+export function formatDuration(start: { date?: string; dateTime?: string }, end: { date?: string; dateTime?: string }): string {
+    if (start.date || end.date) {
+        return '';  // All-day event
+    }
+    if (!start.dateTime || !end.dateTime) {
+        return '';
+    }
+    const startMs = new Date(start.dateTime).getTime();
+    const endMs = new Date(end.dateTime).getTime();
+    const mins = (endMs - startMs) / 60000;
+    if (mins < 60) {
+        return `${mins} min`;
+    }
+    const hrs = mins / 60;
+    if (hrs === Math.floor(hrs)) {
+        return `${hrs} hr${hrs !== 1 ? 's' : ''}`;
+    }
+    return `${hrs.toFixed(1)} hrs`;
 }
 
 /** Parse duration string like "1h", "30m", "1h30m" to minutes */

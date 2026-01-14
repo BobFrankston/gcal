@@ -14,7 +14,7 @@ import { authenticateOAuth } from '@bobfrankston/oauthsupport';
 import type { GoogleEvent, EventsListResponse, CalendarListEntry, CalendarListResponse } from './glib/types.ts';
 import {
     CREDENTIALS_FILE, loadConfig, saveConfig, getUserPaths,
-    ensureUserDir, formatDateTime, parseDuration, parseDateTime, ts, normalizeUser
+    ensureUserDir, formatDateTime, formatDuration, parseDuration, parseDateTime, ts, normalizeUser
 } from './glib/gutils.ts';
 
 const CALENDAR_API_BASE = 'https://www.googleapis.com/calendar/v3';
@@ -125,6 +125,19 @@ async function createEvent(
     return await res.json() as GoogleEvent;
 }
 
+async function deleteEvent(
+    accessToken: string,
+    eventId: string,
+    calendarId = 'primary'
+): Promise<void> {
+    const url = `${CALENDAR_API_BASE}/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`;
+    const res = await apiFetch(url, accessToken, { method: 'DELETE' });
+    if (!res.ok) {
+        const errText = await res.text();
+        throw new Error(`Failed to delete event: ${res.status} ${errText}`);
+    }
+}
+
 async function importIcsFile(
     filePath: string,
     accessToken: string,
@@ -216,6 +229,7 @@ Usage:
 Commands:
   list [n]                           List upcoming n events (default: 10)
   add <title> <when> [duration]      Add event
+  del|delete <id> [id2...]           Delete event(s) by ID (prefix match)
   import <file.ics>                  Import events from ICS file
   calendars                          List available calendars
   help                               Show this help
@@ -225,6 +239,7 @@ Options:
   -defaultUser <email>     Set default user for future use
   -c, -calendar <id>       Calendar ID (default: primary)
   -n <count>               Number of events to list
+  -v, -verbose             Show event IDs and links
 
 Examples:
   gcal meeting.ics                   Import ICS file
@@ -246,6 +261,7 @@ interface ParsedArgs {
     calendar: string;
     count: number;
     help: boolean;
+    verbose: boolean;
     icsFile: string;  /** Direct .ics file path */
 }
 
@@ -258,6 +274,7 @@ function parseArgs(argv: string[]): ParsedArgs {
         calendar: 'primary',
         count: 10,
         help: false,
+        verbose: false,
         icsFile: ''
     };
 
@@ -282,6 +299,11 @@ function parseArgs(argv: string[]): ParsedArgs {
                 break;
             case '-n':
                 result.count = parseInt(argv[++i]) || 10;
+                break;
+            case '-v':
+            case '-verbose':
+            case '--verbose':
+                result.verbose = true;
                 break;
             case '-h':
             case '-help':
@@ -409,13 +431,39 @@ async function main(): Promise<void> {
                 console.log('No upcoming events found.');
             } else {
                 console.log(`\nUpcoming events (${events.length}):\n`);
+
+                // Build table data
+                const rows: string[][] = [];
                 for (const event of events) {
+                    const shortId = (event.id || '').slice(0, 8);
                     const start = event.start ? formatDateTime(event.start) : '?';
-                    const loc = event.location ? ` @ ${event.location}` : '';
-                    console.log(`  ${start} - ${event.summary || '(no title)'}${loc}`);
-                    if (event.htmlLink) {
-                        console.log(`    ${event.htmlLink}`);
+                    const duration = (event.start && event.end) ? formatDuration(event.start, event.end) : '';
+                    const summary = event.summary || '(no title)';
+                    const loc = event.location || '';
+                    if (parsed.verbose) {
+                        rows.push([shortId, start, duration, summary, loc, event.htmlLink || '']);
+                    } else {
+                        rows.push([shortId, start, duration, summary, loc]);
                     }
+                }
+
+                // Calculate column widths
+                const headers = parsed.verbose
+                    ? ['ID', 'When', 'Dur', 'Event', 'Location', 'Link']
+                    : ['ID', 'When', 'Dur', 'Event', 'Location'];
+                const colWidths = headers.map((h, i) =>
+                    Math.max(h.length, ...rows.map(r => (r[i] || '').length))
+                );
+
+                // Print header
+                const headerLine = headers.map((h, i) => h.padEnd(colWidths[i])).join('  ');
+                console.log(headerLine);
+                console.log(colWidths.map(w => '-'.repeat(w)).join('  '));
+
+                // Print rows
+                for (const row of rows) {
+                    const line = row.map((cell, i) => (cell || '').padEnd(colWidths[i])).join('  ');
+                    console.log(line);
                 }
             }
             break;
@@ -451,6 +499,39 @@ async function main(): Promise<void> {
             console.log(`  When: ${formatDateTime(created.start)} - ${formatDateTime(created.end)}`);
             if (created.htmlLink) {
                 console.log(`  Link: ${created.htmlLink}`);
+            }
+            break;
+        }
+
+        case 'del':
+        case 'delete': {
+            if (parsed.args.length === 0) {
+                console.error('Usage: gcal delete <id> [id2] [id3] ...');
+                console.error('Use "gcal list" to see event IDs');
+                process.exit(1);
+            }
+
+            const token = await getAccessToken(user, true);
+            const events = await listEvents(token, parsed.calendar, 50);
+
+            for (const idPrefix of parsed.args) {
+                const matches = events.filter(e => e.id?.startsWith(idPrefix));
+
+                if (matches.length === 0) {
+                    console.error(`${idPrefix}: not found`);
+                    continue;
+                }
+                if (matches.length > 1) {
+                    console.error(`${idPrefix}: ambiguous (${matches.length} matches)`);
+                    for (const e of matches) {
+                        console.error(`  ${e.id?.slice(0, 8)} - ${e.summary}`);
+                    }
+                    continue;
+                }
+
+                const event = matches[0];
+                await deleteEvent(token, event.id!, parsed.calendar);
+                console.log(`Deleted: ${event.summary}`);
             }
             break;
         }
