@@ -247,6 +247,7 @@ Examples:
   gcal add "Dentist" "Friday 3pm" "1h"
   gcal add "Lunch" "1/14/2026 12:00" "1h"
   gcal add "Meeting" "tomorrow 10:00"
+  gcal add "Appointment" "jan 15 2pm"
   gcal -defaultUser bob@gmail.com         Set default user
 
 File Association (Windows):

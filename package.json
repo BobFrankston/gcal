@@ -23,7 +23,8 @@
     "preversion": "npm run check && git add -A",
     "postversion": "git push && git push --tags",
     "release": "npm run prerelease:local && npm version patch && npm publish --access public",
-    "release:local": "npm run prerelease:local && npm version patch && npm publish --access public --ignore-scripts"
+    "release:local": "npm run prerelease:local && npm version patch && npm publish --access public --ignore-scripts",
+    "installer": "npm run release && npm install -g ."
   },
   "keywords": [
     "google",

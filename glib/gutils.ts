@@ -259,6 +259,26 @@ export function parseDateTime(input: string): Date {
         return d;
     }
 
+    // Handle month names: "jan 15", "jan 15 2026", "jan 15 3pm", "january 15 2026 3pm"
+    const months = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+    const monthMatch = lower.match(/^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+(\d{1,2})(?:\s+(\d{4}))?(?:\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?)?$/i);
+    if (monthMatch) {
+        const [, month, day, year, hour, min, ampm] = monthMatch;
+        const monthIndex = months.findIndex(m => month.toLowerCase().startsWith(m));
+        const d = new Date(parseInt(year || now.getFullYear().toString()), monthIndex, parseInt(day));
+        if (hour) {
+            let h = parseInt(hour);
+            if (ampm?.toLowerCase() === 'pm' && h < 12) h += 12;
+            if (ampm?.toLowerCase() === 'am' && h === 12) h = 0;
+            d.setHours(h, parseInt(min || '0'), 0, 0);
+        } else {
+            d.setHours(0, 0, 0, 0);
+        }
+        if (!isNaN(d.getTime())) {
+            return d;
+        }
+    }
+
     // Handle explicit date/time formats: "MM/DD/YYYY HH:mm" or "YYYY-MM-DD HH:mm"
     const dateTimeMatch = input.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2})$/);
     if (dateTimeMatch) {
