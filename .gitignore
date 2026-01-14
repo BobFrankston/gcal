@@ -1,0 +1,58 @@
+# Dependencies
+node_modules/
+
+# Environment and secrets
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+*.p12
+*.pfx
+certs/
+acerts/
+credentials.json
+token.json
+
+# Build outputs
+*.js
+*.js.map
+*.d.ts
+dist/
+build/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Testing
+tests/
+coverage/
+.nyc_output/
+
+# Personal data
+data/
+cruft/
+prev/
+
+# Temporary files
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+.cache/
+
+# OS specific
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.sublime-*
+
+# Runtime
+*.pid

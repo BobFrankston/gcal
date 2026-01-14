@@ -1,0 +1,249 @@
+/**
+ * Shared utilities for gcal tools
+ */
+
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
+
+export interface GcalConfig {
+    lastUser?: string;
+    defaultCalendar?: string;
+}
+
+export interface UserPaths {
+    userDir: string;
+    eventsDir: string;
+    tokenFile: string;
+    tokenWriteFile: string;
+    syncTokenFile: string;
+    configFile: string;
+}
+
+export const APP_DIR = path.dirname(import.meta.dirname);  // Parent of glib/
+
+/** Get the app directory (%APPDATA%\gcal or ~/.config/gcal) */
+export function getAppDir(): string {
+    if (process.platform === 'win32') {
+        return path.join(process.env.APPDATA || os.homedir(), 'gcal');
+    }
+    return path.join(os.homedir(), '.config', 'gcal');
+}
+
+/** Get the data directory (app directory/data, or local data/ symlink for dev) */
+export function getDataDir(): string {
+    const localData = path.join(APP_DIR, 'data');
+    if (fs.existsSync(localData)) {
+        return localData;
+    }
+    return path.join(getAppDir(), 'data');
+}
+
+export const DATA_DIR = getDataDir();
+export const CONFIG_FILE = path.join(getAppDir(), 'config.json');
+
+/** Use credentials from gcards (shared OAuth app) */
+export const CREDENTIALS_FILE = path.join(path.dirname(APP_DIR), 'gcards', 'credentials.json');
+
+export function loadConfig(): GcalConfig {
+    if (fs.existsSync(CONFIG_FILE)) {
+        try {
+            return JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf-8'));
+        } catch (e: any) {
+            throw new Error(`Failed to parse ${CONFIG_FILE}: ${e.message}`);
+        }
+    }
+    return {};
+}
+
+export function saveConfig(config: GcalConfig): void {
+    const appDir = getAppDir();
+    if (!fs.existsSync(appDir)) {
+        fs.mkdirSync(appDir, { recursive: true });
+    }
+    fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2));
+}
+
+export function getUserPaths(user: string): UserPaths {
+    const userDir = path.join(DATA_DIR, user);
+    return {
+        userDir,
+        eventsDir: path.join(userDir, 'events'),
+        tokenFile: path.join(userDir, 'token.json'),
+        tokenWriteFile: path.join(userDir, 'token-write.json'),
+        syncTokenFile: path.join(userDir, 'sync-token.json'),
+        configFile: path.join(userDir, 'config.json')
+    };
+}
+
+export function ensureUserDir(user: string): void {
+    const paths = getUserPaths(user);
+    if (!fs.existsSync(paths.userDir)) {
+        fs.mkdirSync(paths.userDir, { recursive: true });
+    }
+    if (!fs.existsSync(paths.eventsDir)) {
+        fs.mkdirSync(paths.eventsDir, { recursive: true });
+    }
+}
+
+export function normalizeUser(user: string): string {
+    return user.toLowerCase().split(/[+@]/)[0].replace(/\./g, '');
+}
+
+export function getAllUsers(): string[] {
+    if (!fs.existsSync(DATA_DIR)) {
+        return [];
+    }
+    return fs.readdirSync(DATA_DIR)
+        .filter(f => {
+            const fullPath = path.join(DATA_DIR, f);
+            return fs.statSync(fullPath).isDirectory() && !f.startsWith('.');
+        });
+}
+
+export function matchUsers(pattern: string): string[] {
+    const allUsers = getAllUsers();
+    const normalizedPattern = pattern.toLowerCase();
+    return allUsers.filter(user => user.toLowerCase().includes(normalizedPattern));
+}
+
+export function resolveUser(cliUser: string, setAsDefault = false): string {
+    if (cliUser && cliUser !== 'default') {
+        const normalized = normalizeUser(cliUser);
+        const matches = matchUsers(normalized);
+
+        if (matches.length === 1) {
+            const matched = matches[0];
+            console.log(`Matched '${cliUser}' to existing user: ${matched}`);
+            if (setAsDefault) {
+                const config = loadConfig();
+                config.lastUser = matched;
+                saveConfig(config);
+            }
+            return matched;
+        } else if (matches.length > 1) {
+            console.error(`Ambiguous user '${cliUser}' matches multiple users: ${matches.join(', ')}`);
+            console.error('Please be more specific.');
+            process.exit(1);
+        }
+
+        if (!cliUser.includes('@')) {
+            console.error(`New user '${cliUser}' must be specified as an email address (e.g., ${cliUser}@gmail.com)`);
+            process.exit(1);
+        }
+
+        if (setAsDefault) {
+            const config = loadConfig();
+            config.lastUser = normalized;
+            saveConfig(config);
+        }
+        return normalized;
+    }
+
+    const config = loadConfig();
+    if (config.lastUser) {
+        return config.lastUser;
+    }
+
+    const allUsers = getAllUsers();
+    if (allUsers.length === 1) {
+        const onlyUser = allUsers[0];
+        console.log(`Auto-selected only user: ${onlyUser}`);
+        config.lastUser = onlyUser;
+        saveConfig(config);
+        return onlyUser;
+    }
+
+    if (allUsers.length > 1) {
+        console.error(`Multiple users exist: ${allUsers.join(', ')}`);
+        console.error('Use -u <name> to select one.');
+    } else {
+        console.error('No user specified. Use -u <email> on first run (e.g., your Gmail address).');
+    }
+    process.exit(1);
+}
+
+/** Format datetime for display */
+export function formatDateTime(dt: { date?: string; dateTime?: string; timeZone?: string }): string {
+    if (dt.date) {
+        return dt.date;  // All-day event
+    }
+    if (dt.dateTime) {
+        const d = new Date(dt.dateTime);
+        return d.toLocaleString();
+    }
+    return '(no time)';
+}
+
+/** Parse duration string like "1h", "30m", "1h30m" to minutes */
+export function parseDuration(duration: string): number {
+    let minutes = 0;
+    const hourMatch = duration.match(/(\d+)h/i);
+    const minMatch = duration.match(/(\d+)m/i);
+    if (hourMatch) minutes += parseInt(hourMatch[1]) * 60;
+    if (minMatch) minutes += parseInt(minMatch[1]);
+    if (!hourMatch && !minMatch) {
+        minutes = parseInt(duration) || 60;  // Default 60 minutes
+    }
+    return minutes;
+}
+
+/** Parse natural date/time strings */
+export function parseDateTime(input: string): Date {
+    const now = new Date();
+    const lower = input.toLowerCase().trim();
+
+    // Handle relative dates
+    if (lower === 'today') {
+        return now;
+    }
+    if (lower === 'tomorrow') {
+        const d = new Date(now);
+        d.setDate(d.getDate() + 1);
+        return d;
+    }
+
+    // Handle "tomorrow 2pm" or "tomorrow at 2pm"
+    const relMatch = lower.match(/^(today|tomorrow)\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/i);
+    if (relMatch) {
+        const [, rel, hour, min, ampm] = relMatch;
+        const d = new Date(now);
+        if (rel === 'tomorrow') d.setDate(d.getDate() + 1);
+        let h = parseInt(hour);
+        if (ampm?.toLowerCase() === 'pm' && h < 12) h += 12;
+        if (ampm?.toLowerCase() === 'am' && h === 12) h = 0;
+        d.setHours(h, parseInt(min || '0'), 0, 0);
+        return d;
+    }
+
+    // Handle weekday names
+    const weekdays = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+    const dayMatch = lower.match(/^(next\s+)?(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/i);
+    if (dayMatch) {
+        const [, next, day, hour, min, ampm] = dayMatch;
+        const targetDay = weekdays.indexOf(day.toLowerCase());
+        const d = new Date(now);
+        let daysUntil = targetDay - d.getDay();
+        if (daysUntil <= 0 || next) daysUntil += 7;
+        d.setDate(d.getDate() + daysUntil);
+        let h = parseInt(hour);
+        if (ampm?.toLowerCase() === 'pm' && h < 12) h += 12;
+        if (ampm?.toLowerCase() === 'am' && h === 12) h = 0;
+        d.setHours(h, parseInt(min || '0'), 0, 0);
+        return d;
+    }
+
+    // Try native Date parsing
+    const parsed = new Date(input);
+    if (!isNaN(parsed.getTime())) {
+        return parsed;
+    }
+
+    throw new Error(`Cannot parse date/time: ${input}`);
+}
+
+/** Timestamp for logging */
+export function ts(): string {
+    const now = new Date();
+    return `[${now.toTimeString().slice(0, 8)}]`;
+}

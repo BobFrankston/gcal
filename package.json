@@ -1,0 +1,45 @@
+{
+  "name": "@bobfrankston/gcal",
+  "version": "0.1.0",
+  "description": "Google Calendar CLI tool with ICS import support",
+  "type": "module",
+  "main": "gcal.ts",
+  "bin": {
+    "gcal": "gcal.ts"
+  },
+  "files": [
+    "gcal.ts",
+    "glib/**/*.ts",
+    "tsconfig.json",
+    "README.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bobfrankston/gcal.git"
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "prerelease:local": "git add -A && (git diff-index --quiet HEAD || git commit -m \"Pre-release commit\")",
+    "preversion": "npm run check && git add -A",
+    "postversion": "git push && git push --tags",
+    "release": "npm whoami && npm run prerelease:local && npm version patch && npm publish --access public",
+    "installer": "npm run release && npm install -g @bobfrankston/gcal"
+  },
+  "keywords": [
+    "google",
+    "calendar",
+    "ics",
+    "ical",
+    "oauth",
+    "cli"
+  ],
+  "author": "Bob Frankston",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^25.0.3"
+  },
+  "dependencies": {
+    "@bobfrankston/oauthsupport": "^1.0.1",
+    "ical.js": "^2.1.0"
+  }
+}
