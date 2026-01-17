@@ -17,3 +17,11 @@ Thumbs.db
 .cache/
 package-lock.json
 .vscode/
+*.ts
+!*.d.ts
+*.map
+.gitattributes
+*cert*/
+token*
+tsconfig.json
+.globalize.json5

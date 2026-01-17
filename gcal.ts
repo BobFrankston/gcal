@@ -245,7 +245,8 @@ Options:
   -n <count>               Number of events to list
   -after <when>            List events after this date/time
   -before <when>           List events before this date/time
-  -v, -verbose             Show event IDs and links
+  -verbose                 Show event IDs and links
+  -v, --version            Show version
 
 Examples:
   gcal meeting.ics                        Import ICS file
@@ -273,6 +274,7 @@ interface ParsedArgs {
     count: number;
     help: boolean;
     verbose: boolean;
+    version: boolean;
     icsFile: string;  /** Direct .ics file path */
     after: string;    /** Filter: events after this date/time */
     before: string;   /** Filter: events before this date/time */
@@ -288,6 +290,7 @@ function parseArgs(argv: string[]): ParsedArgs {
         count: 10,
         help: false,
         verbose: false,
+        version: false,
         icsFile: '',
         after: '',
         before: ''
@@ -323,10 +326,14 @@ function parseArgs(argv: string[]): ParsedArgs {
             case '--before':
                 result.before = argv[++i] || '';
                 break;
-            case '-v':
             case '-verbose':
             case '--verbose':
                 result.verbose = true;
+                break;
+            case '-v':
+            case '-V':
+            case '--version':
+                result.version = true;
                 break;
             case '-h':
             case '-help':
@@ -396,6 +403,12 @@ async function main(): Promise<void> {
         if (!parsed.command && !parsed.icsFile) {
             process.exit(0);
         }
+    }
+
+    if (parsed.version) {
+        const pkg = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, 'package.json'), 'utf-8'));
+        console.log(`gcal ${pkg.version}`);
+        process.exit(0);
     }
 
     if (parsed.help) {
