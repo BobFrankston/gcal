@@ -90,8 +90,7 @@ async function listEvents(
     accessToken: string,
     calendarId = 'primary',
     maxResults = 10,
-    timeMin?: string,
-    timeMax?: string
+    timeMin?: string
 ): Promise<GoogleEvent[]> {
     const params = new URLSearchParams({
         maxResults: maxResults.toString(),
@@ -99,9 +98,6 @@ async function listEvents(
         orderBy: 'startTime',
         timeMin: timeMin || new Date().toISOString()
     });
-    if (timeMax) {
-        params.set('timeMax', timeMax);
-    }
 
     const url = `${CALENDAR_API_BASE}/calendars/${encodeURIComponent(calendarId)}/events?${params}`;
     const res = await apiFetch(url, accessToken);
@@ -243,19 +239,14 @@ Options:
   -defaultUser <email>     Set default user for future use
   -c, -calendar <id>       Calendar ID (default: primary)
   -n <count>               Number of events to list
-  -after <when>            List events after this date/time
-  -before <when>           List events before this date/time
-  -verbose                 Show event IDs and links
-  -v, --version            Show version
+  -v, -verbose             Show event IDs and links
 
 Examples:
   gcal meeting.ics                        Import ICS file
   gcal list                               List next 10 events
-  gcal list -after tomorrow -before "jan 30"
   gcal add "Dentist" "Friday 3pm" "1h"
   gcal add "Lunch" "1/14/2026 12:00" "1h"
-  gcal add "Meeting" "tomorrow 10am"
-  gcal add "Call" "3pm" "30m"
+  gcal add "Meeting" "tomorrow 10:00"
   gcal add "Appointment" "jan 15 2pm"
   gcal -defaultUser bob@gmail.com         Set default user
 
@@ -274,10 +265,7 @@ interface ParsedArgs {
     count: number;
     help: boolean;
     verbose: boolean;
-    version: boolean;
     icsFile: string;  /** Direct .ics file path */
-    after: string;    /** Filter: events after this date/time */
-    before: string;   /** Filter: events before this date/time */
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -290,10 +278,7 @@ function parseArgs(argv: string[]): ParsedArgs {
         count: 10,
         help: false,
         verbose: false,
-        version: false,
-        icsFile: '',
-        after: '',
-        before: ''
+        icsFile: ''
     };
 
     const unknown: string[] = [];
@@ -318,22 +303,10 @@ function parseArgs(argv: string[]): ParsedArgs {
             case '-n':
                 result.count = parseInt(argv[++i]) || 10;
                 break;
-            case '-after':
-            case '--after':
-                result.after = argv[++i] || '';
-                break;
-            case '-before':
-            case '--before':
-                result.before = argv[++i] || '';
-                break;
+            case '-v':
             case '-verbose':
             case '--verbose':
                 result.verbose = true;
-                break;
-            case '-v':
-            case '-V':
-            case '--version':
-                result.version = true;
                 break;
             case '-h':
             case '-help':
@@ -405,12 +378,6 @@ async function main(): Promise<void> {
         }
     }
 
-    if (parsed.version) {
-        const pkg = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, 'package.json'), 'utf-8'));
-        console.log(`gcal ${pkg.version}`);
-        process.exit(0);
-    }
-
     if (parsed.help) {
         showUsage();
         process.exit(0);
@@ -461,9 +428,7 @@ async function main(): Promise<void> {
         case 'list': {
             const count = parsed.args[0] ? parseInt(parsed.args[0]) : parsed.count;
             const token = await getAccessToken(user, false);
-            const timeMin = parsed.after ? parseDateTime(parsed.after).toISOString() : undefined;
-            const timeMax = parsed.before ? parseDateTime(parsed.before).toISOString() : undefined;
-            const events = await listEvents(token, parsed.calendar, count, timeMin, timeMax);
+            const events = await listEvents(token, parsed.calendar, count);
 
             if (events.length === 0) {
                 console.log('No upcoming events found.');
@@ -518,32 +483,6 @@ async function main(): Promise<void> {
             const startTime = parseDateTime(when);
             const durationMins = parseDuration(duration);
             const endTime = new Date(startTime.getTime() + durationMins * 60 * 1000);
-
-            // Check for suspicious dates (likely parsing errors)
-            const now = new Date();
-            const twoYearsFromNow = new Date(now);
-            twoYearsFromNow.setFullYear(twoYearsFromNow.getFullYear() + 2);
-
-            let warning = '';
-            if (startTime < now) {
-                warning = `Date is in the past: ${formatDateTime({ dateTime: startTime.toISOString() })}`;
-            } else if (startTime > twoYearsFromNow) {
-                warning = `Date is more than 2 years away: ${formatDateTime({ dateTime: startTime.toISOString() })}`;
-            }
-
-            if (warning) {
-                console.log(`\nWarning: ${warning}`);
-                console.log(`Input was: "${when}"`);
-                const readline = await import('readline');
-                const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-                const response = await new Promise<string>(resolve => {
-                    rl.question('Continue? (y/N) ', answer => { rl.close(); resolve(answer); });
-                });
-                if (response.toLowerCase() !== 'y') {
-                    console.log('Cancelled.');
-                    process.exit(0);
-                }
-            }
 
             const event: GoogleEvent = {
                 summary: title,

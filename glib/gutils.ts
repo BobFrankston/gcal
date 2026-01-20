@@ -307,27 +307,16 @@ export function parseDateTime(input: string): Date {
         return d;
     }
 
-    // Handle time with am/pm: "10am", "3pm", "10:30am", "3:45pm" - assume today
-    const timeAmPmMatch = lower.match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)$/);
-    if (timeAmPmMatch) {
-        const [, hour, min, ampm] = timeAmPmMatch;
-        const d = new Date(now);
+    // Handle time with am/pm (2pm, 10am, 2:30pm) - assume today
+    const ampmMatch = lower.match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)$/);
+    if (ampmMatch) {
+        const [, hour, min, ampm] = ampmMatch;
         let h = parseInt(hour);
         if (ampm === 'pm' && h < 12) h += 12;
         if (ampm === 'am' && h === 12) h = 0;
+        const d = new Date(now);
         d.setHours(h, parseInt(min || '0'), 0, 0);
         return d;
-    }
-
-    // Handle bare hour: "10", "14" - interpret as today at that hour (not a month)
-    const bareHourMatch = input.match(/^(\d{1,2})$/);
-    if (bareHourMatch) {
-        const hour = parseInt(bareHourMatch[1]);
-        if (hour >= 0 && hour <= 23) {
-            const d = new Date(now);
-            d.setHours(hour, 0, 0, 0);
-            return d;
-        }
     }
 
     // Try native Date parsing
