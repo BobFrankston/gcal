@@ -298,16 +298,19 @@ export function parseDateTime(input: string): Date {
         }
     }
 
-    // Handle time only (HH:mm) - assume today
+    // Handle time only (HH:mm) - assume today, or tomorrow if time already passed
     const timeMatch = input.match(/^(\d{1,2}):(\d{2})$/);
     if (timeMatch) {
         const [, hour, min] = timeMatch;
         const d = new Date(now);
         d.setHours(parseInt(hour), parseInt(min), 0, 0);
+        if (d <= now) {
+            d.setDate(d.getDate() + 1);  // Time passed, use tomorrow
+        }
         return d;
     }
 
-    // Handle time with am/pm (2pm, 10am, 2:30pm) - assume today
+    // Handle time with am/pm (2pm, 10am, 2:30pm) - assume today, or tomorrow if time already passed
     const ampmMatch = lower.match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)$/);
     if (ampmMatch) {
         const [, hour, min, ampm] = ampmMatch;
@@ -316,6 +319,9 @@ export function parseDateTime(input: string): Date {
         if (ampm === 'am' && h === 12) h = 0;
         const d = new Date(now);
         d.setHours(h, parseInt(min || '0'), 0, 0);
+        if (d <= now) {
+            d.setDate(d.getDate() + 1);  // Time passed, use tomorrow
+        }
         return d;
     }
 

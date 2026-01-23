@@ -90,14 +90,17 @@ async function listEvents(
     accessToken: string,
     calendarId = 'primary',
     maxResults = 10,
-    timeMin?: string
+    timeMin?: string,
+    timeMax?: string
 ): Promise<GoogleEvent[]> {
     const params = new URLSearchParams({
         maxResults: maxResults.toString(),
         singleEvents: 'true',
-        orderBy: 'startTime',
-        timeMin: timeMin || new Date().toISOString()
+        orderBy: 'startTime'
     });
+    if (timeMin) params.set('timeMin', timeMin);
+    if (timeMax) params.set('timeMax', timeMax);
+    if (!timeMin && !timeMax) params.set('timeMin', new Date().toISOString());
 
     const url = `${CALENDAR_API_BASE}/calendars/${encodeURIComponent(calendarId)}/events?${params}`;
     const res = await apiFetch(url, accessToken);
@@ -228,6 +231,7 @@ Usage:
 
 Commands:
   list [n]                           List upcoming n events (default: 10)
+  past [n]                           List past n events (default: 10)
   add <title> <when> [duration]      Add event
   del|delete <id> [id2...]           Delete event(s) by ID (prefix match)
   import <file.ics>                  Import events from ICS file
@@ -436,6 +440,57 @@ async function main(): Promise<void> {
                 console.log(`\nUpcoming events (${events.length}):\n`);
 
                 // Build table data
+                const rows: string[][] = [];
+                for (const event of events) {
+                    const shortId = (event.id || '').slice(0, 8);
+                    const start = event.start ? formatDateTime(event.start) : '?';
+                    const duration = (event.start && event.end) ? formatDuration(event.start, event.end) : '';
+                    const summary = event.summary || '(no title)';
+                    const loc = event.location || '';
+                    if (parsed.verbose) {
+                        rows.push([shortId, start, duration, summary, loc, event.htmlLink || '']);
+                    } else {
+                        rows.push([shortId, start, duration, summary, loc]);
+                    }
+                }
+
+                // Calculate column widths
+                const headers = parsed.verbose
+                    ? ['ID', 'When', 'Dur', 'Event', 'Location', 'Link']
+                    : ['ID', 'When', 'Dur', 'Event', 'Location'];
+                const colWidths = headers.map((h, i) =>
+                    Math.max(h.length, ...rows.map(r => (r[i] || '').length))
+                );
+
+                // Print header
+                const headerLine = headers.map((h, i) => h.padEnd(colWidths[i])).join('  ');
+                console.log(headerLine);
+                console.log(colWidths.map(w => '-'.repeat(w)).join('  '));
+
+                // Print rows
+                for (const row of rows) {
+                    const line = row.map((cell, i) => (cell || '').padEnd(colWidths[i])).join('  ');
+                    console.log(line);
+                }
+            }
+            break;
+        }
+
+        case 'past': {
+            const count = parsed.args[0] ? parseInt(parsed.args[0]) : parsed.count;
+            const token = await getAccessToken(user, false);
+            // Get events before now, then reverse to show most recent first
+            const now = new Date();
+            const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+            const events = await listEvents(token, parsed.calendar, count, thirtyDaysAgo.toISOString(), now.toISOString());
+            events.reverse();  // Most recent first
+
+            if (events.length === 0) {
+                console.log('No past events found in last 30 days.');
+            } else {
+                console.log(`\nPast events (${events.length}):\n`);
+
+                // Build table data (same format as list)
                 const rows: string[][] = [];
                 for (const event of events) {
                     const shortId = (event.id || '').slice(0, 8);
