@@ -40,6 +40,13 @@
     "@types/node": "^25.0.9"
   },
   "dependencies": {
+    "@bobfrankston/oauthsupport": "^1.0.5",
+    "ical.js": "^2.1.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  ".dependencies": {
     "@bobfrankston/oauthsupport": "file:../../../projects/OAuth/OauthSupport",
     "ical.js": "^2.1.0"
   }

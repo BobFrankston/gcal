@@ -243,6 +243,7 @@ Options:
   -defaultUser <email>     Set default user for future use
   -c, -calendar <id>       Calendar ID (default: primary)
   -n <count>               Number of events to list
+  -r, -reminder <time>     Reminder before event (10, 30m, 1h, 1d)
   -v, -verbose             Show event IDs and links
 
 Examples:
@@ -251,7 +252,7 @@ Examples:
   gcal add "Dentist" "Friday 3pm" "1h"
   gcal add "Lunch" "1/14/2026 12:00" "1h"
   gcal add "Meeting" "tomorrow 10:00"
-  gcal add "Appointment" "jan 15 2pm"
+  gcal add "Appointment" "jan 15 2pm" -r 1h
   gcal -defaultUser bob@gmail.com         Set default user
 
 File Association (Windows):
@@ -270,6 +271,20 @@ interface ParsedArgs {
     help: boolean;
     verbose: boolean;
     icsFile: string;  /** Direct .ics file path */
+    reminder: number; /** Reminder in minutes, -1 = not set */
+}
+
+/** Parse reminder string: number (minutes), or suffix m/h/d */
+function parseReminder(val: string): number {
+    const match = val.match(/^(\d+)(m|h|d)?$/i);
+    if (!match) return -1;
+    const num = parseInt(match[1]);
+    const unit = (match[2] || 'm').toLowerCase();
+    switch (unit) {
+        case 'h': return num * 60;
+        case 'd': return num * 60 * 24;
+        default: return num;
+    }
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -282,7 +297,8 @@ function parseArgs(argv: string[]): ParsedArgs {
         count: 10,
         help: false,
         verbose: false,
-        icsFile: ''
+        icsFile: '',
+        reminder: -1
     };
 
     const unknown: string[] = [];
@@ -311,6 +327,11 @@ function parseArgs(argv: string[]): ParsedArgs {
             case '-verbose':
             case '--verbose':
                 result.verbose = true;
+                break;
+            case '-r':
+            case '-reminder':
+            case '--reminder':
+                result.reminder = parseReminder(argv[++i] || '');
                 break;
             case '-h':
             case '-help':
@@ -551,10 +572,22 @@ async function main(): Promise<void> {
                 }
             };
 
+            if (parsed.reminder >= 0) {
+                event.reminders = {
+                    useDefault: false,
+                    overrides: [{ method: 'popup', minutes: parsed.reminder }]
+                };
+            }
+
             const token = await getAccessToken(user, true);
             const created = await createEvent(token, event, parsed.calendar);
             console.log(`\nEvent created: ${created.summary}`);
             console.log(`  When: ${formatDateTime(created.start)} - ${formatDateTime(created.end)}`);
+            if (parsed.reminder >= 0) {
+                const mins = parsed.reminder;
+                const reminderStr = mins >= 1440 ? `${mins / 1440}d` : mins >= 60 ? `${mins / 60}h` : `${mins}m`;
+                console.log(`  Reminder: ${reminderStr} before`);
+            }
             if (created.htmlLink) {
                 console.log(`  Link: ${created.htmlLink}`);
             }
