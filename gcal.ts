@@ -298,7 +298,7 @@ function parseArgs(argv: string[]): ParsedArgs {
         help: false,
         verbose: false,
         icsFile: '',
-        reminder: -1
+        reminder: 60
     };
 
     const unknown: string[] = [];
