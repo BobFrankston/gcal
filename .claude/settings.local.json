@@ -4,7 +4,8 @@
       "Bash(npx tsc:*)",
       "Bash(node -e:*)",
       "Bash(dir:*)",
-      "Bash(npm ls:*)"
+      "Bash(npm ls:*)",
+      "Bash(node:*)"
     ]
   }
 }
