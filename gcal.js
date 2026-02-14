@@ -360,6 +360,7 @@ async function main() {
             const count = parsed.args[0] ? parseInt(parsed.args[0]) : parsed.count;
             const token = await getAccessToken(user, false);
             let events = await listEvents(token, parsed.calendar, count);
+            const birthdayCount = events.filter(e => e.eventType === 'birthday').length;
             if (!parsed.birthdays) {
                 events = events.filter(e => e.eventType !== 'birthday');
             }
@@ -397,6 +398,9 @@ async function main() {
                     const line = row.map((cell, i) => (cell || '').padEnd(colWidths[i])).join('  ');
                     console.log(line);
                 }
+            }
+            if (birthdayCount > 0 && !parsed.birthdays) {
+                console.log(`\n(${birthdayCount} birthday${birthdayCount > 1 ? 's' : ''} hidden, -b to show)`);
             }
             break;
         }
