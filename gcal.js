@@ -68,18 +68,13 @@ async function listCalendars(accessToken) {
     const data = await res.json();
     return data.items || [];
 }
-async function listEvents(accessToken, calendarId = 'primary', maxResults = 10, timeMin, timeMax) {
+async function listEvents(accessToken, calendarId = 'primary', maxResults = 10, timeMin) {
     const params = new URLSearchParams({
         maxResults: maxResults.toString(),
         singleEvents: 'true',
-        orderBy: 'startTime'
+        orderBy: 'startTime',
+        timeMin: timeMin || new Date().toISOString()
     });
-    if (timeMin)
-        params.set('timeMin', timeMin);
-    if (timeMax)
-        params.set('timeMax', timeMax);
-    if (!timeMin && !timeMax)
-        params.set('timeMin', new Date().toISOString());
     const url = `${CALENDAR_API_BASE}/calendars/${encodeURIComponent(calendarId)}/events?${params}`;
     const res = await apiFetch(url, accessToken);
     if (!res.ok) {
@@ -187,7 +182,6 @@ Usage:
 
 Commands:
   list [n]                           List upcoming n events (default: 10)
-  past [n]                           List past n events (default: 10)
   add <title> <when> [duration]      Add event
   del|delete <id> [id2...]           Delete event(s) by ID (prefix match)
   import <file.ics>                  Import events from ICS file
@@ -199,8 +193,8 @@ Options:
   -defaultUser <email>     Set default user for future use
   -c, -calendar <id>       Calendar ID (default: primary)
   -n <count>               Number of events to list
-  -r, -reminder <time>     Reminder before event (10, 30m, 1h, 1d)
   -v, -verbose             Show event IDs and links
+  -birthdays               Include birthday events in delete
 
 Examples:
   gcal meeting.ics                        Import ICS file
@@ -208,26 +202,13 @@ Examples:
   gcal add "Dentist" "Friday 3pm" "1h"
   gcal add "Lunch" "1/14/2026 12:00" "1h"
   gcal add "Meeting" "tomorrow 10:00"
-  gcal add "Appointment" "jan 15 2pm" -r 1h
+  gcal add "Appointment" "jan 15 2pm"
   gcal -defaultUser bob@gmail.com         Set default user
 
 File Association (Windows):
   assoc .ics=icsfile
   ftype icsfile=gcal "%1"
 `);
-}
-/** Parse reminder string: number (minutes), or suffix m/h/d */
-function parseReminder(val) {
-    const match = val.match(/^(\d+)(m|h|d)?$/i);
-    if (!match)
-        return -1;
-    const num = parseInt(match[1]);
-    const unit = (match[2] || 'm').toLowerCase();
-    switch (unit) {
-        case 'h': return num * 60;
-        case 'd': return num * 60 * 24;
-        default: return num;
-    }
 }
 function parseArgs(argv) {
     const result = {
@@ -240,7 +221,7 @@ function parseArgs(argv) {
         help: false,
         verbose: false,
         icsFile: '',
-        reminder: 60
+        birthdays: false
     };
     const unknown = [];
     let i = 0;
@@ -269,10 +250,9 @@ function parseArgs(argv) {
             case '--verbose':
                 result.verbose = true;
                 break;
-            case '-r':
-            case '-reminder':
-            case '--reminder':
-                result.reminder = parseReminder(argv[++i] || '');
+            case '-birthdays':
+            case '--birthdays':
+                result.birthdays = true;
                 break;
             case '-h':
             case '-help':
@@ -416,51 +396,6 @@ async function main() {
             }
             break;
         }
-        case 'past': {
-            const count = parsed.args[0] ? parseInt(parsed.args[0]) : parsed.count;
-            const token = await getAccessToken(user, false);
-            // Get events before now, then reverse to show most recent first
-            const now = new Date();
-            const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-            const events = await listEvents(token, parsed.calendar, count, thirtyDaysAgo.toISOString(), now.toISOString());
-            events.reverse(); // Most recent first
-            if (events.length === 0) {
-                console.log('No past events found in last 30 days.');
-            }
-            else {
-                console.log(`\nPast events (${events.length}):\n`);
-                // Build table data (same format as list)
-                const rows = [];
-                for (const event of events) {
-                    const shortId = (event.id || '').slice(0, 8);
-                    const start = event.start ? formatDateTime(event.start) : '?';
-                    const duration = (event.start && event.end) ? formatDuration(event.start, event.end) : '';
-                    const summary = event.summary || '(no title)';
-                    const loc = event.location || '';
-                    if (parsed.verbose) {
-                        rows.push([shortId, start, duration, summary, loc, event.htmlLink || '']);
-                    }
-                    else {
-                        rows.push([shortId, start, duration, summary, loc]);
-                    }
-                }
-                // Calculate column widths
-                const headers = parsed.verbose
-                    ? ['ID', 'When', 'Dur', 'Event', 'Location', 'Link']
-                    : ['ID', 'When', 'Dur', 'Event', 'Location'];
-                const colWidths = headers.map((h, i) => Math.max(h.length, ...rows.map(r => (r[i] || '').length)));
-                // Print header
-                const headerLine = headers.map((h, i) => h.padEnd(colWidths[i])).join('  ');
-                console.log(headerLine);
-                console.log(colWidths.map(w => '-'.repeat(w)).join('  '));
-                // Print rows
-                for (const row of rows) {
-                    const line = row.map((cell, i) => (cell || '').padEnd(colWidths[i])).join('  ');
-                    console.log(line);
-                }
-            }
-            break;
-        }
         case 'add': {
             if (parsed.args.length < 2) {
                 console.error('Usage: gcal add <title> <when> [duration]');
@@ -482,21 +417,10 @@ async function main() {
                     timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
                 }
             };
-            if (parsed.reminder >= 0) {
-                event.reminders = {
-                    useDefault: false,
-                    overrides: [{ method: 'popup', minutes: parsed.reminder }]
-                };
-            }
             const token = await getAccessToken(user, true);
             const created = await createEvent(token, event, parsed.calendar);
             console.log(`\nEvent created: ${created.summary}`);
             console.log(`  When: ${formatDateTime(created.start)} - ${formatDateTime(created.end)}`);
-            if (parsed.reminder >= 0) {
-                const mins = parsed.reminder;
-                const reminderStr = mins >= 1440 ? `${mins / 1440}d` : mins >= 60 ? `${mins / 60}h` : `${mins}m`;
-                console.log(`  Reminder: ${reminderStr} before`);
-            }
             if (created.htmlLink) {
                 console.log(`  Link: ${created.htmlLink}`);
             }
@@ -525,6 +449,10 @@ async function main() {
                     continue;
                 }
                 const event = matches[0];
+                if (event.eventType === 'birthday' && !parsed.birthdays) {
+                    console.log(`Skipped birthday: ${event.summary} (use -birthdays to include)`);
+                    continue;
+                }
                 await deleteEvent(token, event.id, parsed.calendar);
                 console.log(`Deleted: ${event.summary}`);
             }
