@@ -7,31 +7,22 @@
  *   assoc .ics=icsfile
  *   ftype icsfile=gcal "%1"
  */
-
 import fs from 'fs';
 import path from 'path';
 import { authenticateOAuth } from '@bobfrankston/oauthsupport';
-import type { GoogleEvent, EventsListResponse, CalendarListEntry, CalendarListResponse } from './glib/types.js';
-import {
-    CREDENTIALS_FILE, loadConfig, saveConfig, getUserPaths,
-    ensureUserDir, formatDateTime, formatDuration, parseDuration, parseDateTime, ts, normalizeUser
-} from './glib/gutils.js';
-
+import { CREDENTIALS_FILE, loadConfig, saveConfig, getUserPaths, ensureUserDir, formatDateTime, formatDuration, parseDuration, parseDateTime, ts, normalizeUser } from './glib/gutils.js';
 const CALENDAR_API_BASE = 'https://www.googleapis.com/calendar/v3';
 const CALENDAR_SCOPE_READ = 'https://www.googleapis.com/auth/calendar.readonly';
 const CALENDAR_SCOPE_WRITE = 'https://www.googleapis.com/auth/calendar';
-
-let abortController: AbortController = null;
-
-function setupAbortHandler(): void {
+let abortController = null;
+function setupAbortHandler() {
     abortController = new AbortController();
     process.on('SIGINT', () => {
         abortController?.abort();
         console.log('\n\nCtrl+C pressed - aborting...');
     });
 }
-
-async function getAccessToken(user: string, writeAccess = false, forceRefresh = false): Promise<string> {
+async function getAccessToken(user, writeAccess = false, forceRefresh = false) {
     if (!fs.existsSync(CREDENTIALS_FILE)) {
         console.error(`\nCredentials file not found: ${CREDENTIALS_FILE}\n`);
         console.error(`gcal uses the same credentials as gcards.`);
@@ -39,19 +30,15 @@ async function getAccessToken(user: string, writeAccess = false, forceRefresh = 
         console.error(`See: https://github.com/BobFrankston/oauthsupport/blob/master/SETUP-GOOGLE-OAUTH.md`);
         process.exit(1);
     }
-
     const paths = getUserPaths(user);
     ensureUserDir(user);
-
     const scope = writeAccess ? CALENDAR_SCOPE_WRITE : CALENDAR_SCOPE_READ;
     const tokenFileName = writeAccess ? 'token-write.json' : 'token.json';
     const tokenFilePath = path.join(paths.userDir, tokenFileName);
-
     if (forceRefresh && fs.existsSync(tokenFilePath)) {
         fs.unlinkSync(tokenFilePath);
         console.log(`${ts()} Token expired, refreshing...`);
     }
-
     const token = await authenticateOAuth(CREDENTIALS_FILE, {
         scope,
         tokenDirectory: paths.userDir,
@@ -59,15 +46,12 @@ async function getAccessToken(user: string, writeAccess = false, forceRefresh = 
         credentialsKey: 'web',
         signal: abortController?.signal
     });
-
     if (!token) {
         throw new Error('OAuth authentication failed');
     }
-
     return token.access_token;
 }
-
-async function apiFetch(url: string, accessToken: string, options: RequestInit = {}): Promise<Response> {
+async function apiFetch(url, accessToken, options = {}) {
     const headers = {
         'Authorization': `Bearer ${accessToken}`,
         'Content-Type': 'application/json',
@@ -75,47 +59,36 @@ async function apiFetch(url: string, accessToken: string, options: RequestInit =
     };
     return fetch(url, { ...options, headers });
 }
-
-async function listCalendars(accessToken: string): Promise<CalendarListEntry[]> {
+async function listCalendars(accessToken) {
     const url = `${CALENDAR_API_BASE}/users/me/calendarList`;
     const res = await apiFetch(url, accessToken);
     if (!res.ok) {
         throw new Error(`Failed to list calendars: ${res.status} ${res.statusText}`);
     }
-    const data = await res.json() as CalendarListResponse;
+    const data = await res.json();
     return data.items || [];
 }
-
-async function listEvents(
-    accessToken: string,
-    calendarId = 'primary',
-    maxResults = 10,
-    timeMin?: string,
-    timeMax?: string
-): Promise<GoogleEvent[]> {
+async function listEvents(accessToken, calendarId = 'primary', maxResults = 10, timeMin, timeMax) {
     const params = new URLSearchParams({
         maxResults: maxResults.toString(),
         singleEvents: 'true',
         orderBy: 'startTime'
     });
-    if (timeMin) params.set('timeMin', timeMin);
-    if (timeMax) params.set('timeMax', timeMax);
-    if (!timeMin && !timeMax) params.set('timeMin', new Date().toISOString());
-
+    if (timeMin)
+        params.set('timeMin', timeMin);
+    if (timeMax)
+        params.set('timeMax', timeMax);
+    if (!timeMin && !timeMax)
+        params.set('timeMin', new Date().toISOString());
     const url = `${CALENDAR_API_BASE}/calendars/${encodeURIComponent(calendarId)}/events?${params}`;
     const res = await apiFetch(url, accessToken);
     if (!res.ok) {
         throw new Error(`Failed to list events: ${res.status} ${res.statusText}`);
     }
-    const data = await res.json() as EventsListResponse;
+    const data = await res.json();
     return data.items || [];
 }
-
-async function createEvent(
-    accessToken: string,
-    event: GoogleEvent,
-    calendarId = 'primary'
-): Promise<GoogleEvent> {
+async function createEvent(accessToken, event, calendarId = 'primary') {
     const url = `${CALENDAR_API_BASE}/calendars/${encodeURIComponent(calendarId)}/events`;
     const res = await apiFetch(url, accessToken, {
         method: 'POST',
@@ -125,14 +98,9 @@ async function createEvent(
         const errText = await res.text();
         throw new Error(`Failed to create event: ${res.status} ${errText}`);
     }
-    return await res.json() as GoogleEvent;
+    return await res.json();
 }
-
-async function deleteEvent(
-    accessToken: string,
-    eventId: string,
-    calendarId = 'primary'
-): Promise<void> {
+async function deleteEvent(accessToken, eventId, calendarId = 'primary') {
     const url = `${CALENDAR_API_BASE}/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`;
     const res = await apiFetch(url, accessToken, { method: 'DELETE' });
     if (!res.ok) {
@@ -140,55 +108,45 @@ async function deleteEvent(
         throw new Error(`Failed to delete event: ${res.status} ${errText}`);
     }
 }
-
-async function importIcsFile(
-    filePath: string,
-    accessToken: string,
-    calendarId = 'primary'
-): Promise<{ imported: number; errors: string[] }> {
+async function importIcsFile(filePath, accessToken, calendarId = 'primary') {
     const ICAL = await import('ical.js');
-    const result = { imported: 0, errors: [] as string[] };
-
+    const result = { imported: 0, errors: [] };
     const icsContent = fs.readFileSync(filePath, 'utf-8');
-
     try {
         const jcalData = ICAL.default.parse(icsContent);
         const vcalendar = new ICAL.default.Component(jcalData);
         const vevents = vcalendar.getAllSubcomponents('vevent');
-
         console.log(`Found ${vevents.length} event(s)\n`);
-
         for (const vevent of vevents) {
             try {
                 const event = new ICAL.default.Event(vevent);
-                const googleEvent: GoogleEvent = {
+                const googleEvent = {
                     summary: event.summary || 'Untitled Event',
                     description: event.description || undefined,
                     location: event.location || undefined,
                     start: {},
                     end: {}
                 };
-
                 const startDate = event.startDate;
                 if (startDate) {
                     if (startDate.isDate) {
                         googleEvent.start.date = startDate.toJSDate().toISOString().split('T')[0];
-                    } else {
+                    }
+                    else {
                         googleEvent.start.dateTime = startDate.toJSDate().toISOString();
                         googleEvent.start.timeZone = startDate.zone?.tzid || Intl.DateTimeFormat().resolvedOptions().timeZone;
                     }
                 }
-
                 const endDate = event.endDate;
                 if (endDate) {
                     if (endDate.isDate) {
                         googleEvent.end.date = endDate.toJSDate().toISOString().split('T')[0];
-                    } else {
+                    }
+                    else {
                         googleEvent.end.dateTime = endDate.toJSDate().toISOString();
                         googleEvent.end.timeZone = endDate.zone?.tzid || Intl.DateTimeFormat().resolvedOptions().timeZone;
                     }
                 }
-
                 const attendees = vevent.getAllProperties('attendee');
                 if (attendees.length > 0) {
                     googleEvent.attendees = attendees.map(att => {
@@ -199,29 +157,27 @@ async function importIcsFile(
                         return { email, displayName: displayName || undefined };
                     });
                 }
-
                 const rrule = vevent.getFirstPropertyValue('rrule');
                 if (rrule) {
                     googleEvent.recurrence = [`RRULE:${rrule.toString()}`];
                 }
-
                 await createEvent(accessToken, googleEvent, calendarId);
                 console.log(`  + ${googleEvent.summary}`);
                 result.imported++;
-            } catch (e: any) {
+            }
+            catch (e) {
                 const summary = vevent.getFirstPropertyValue('summary') || 'unknown';
                 result.errors.push(`${summary}: ${e.message}`);
                 console.error(`  ! Failed: ${summary}`);
             }
         }
-    } catch (e: any) {
+    }
+    catch (e) {
         result.errors.push(`Parse error: ${e.message}`);
     }
-
     return result;
 }
-
-function showUsage(): void {
+function showUsage() {
     console.log(`
 gcal - Google Calendar CLI
 
@@ -260,24 +216,11 @@ File Association (Windows):
   ftype icsfile=gcal "%1"
 `);
 }
-
-interface ParsedArgs {
-    command: string;
-    args: string[];
-    user: string;
-    defaultUser: string;
-    calendar: string;
-    count: number;
-    help: boolean;
-    verbose: boolean;
-    icsFile: string;  /** Direct .ics file path */
-    reminder: number; /** Reminder in minutes, -1 = not set */
-}
-
 /** Parse reminder string: number (minutes), or suffix m/h/d */
-function parseReminder(val: string): number {
+function parseReminder(val) {
     const match = val.match(/^(\d+)(m|h|d)?$/i);
-    if (!match) return -1;
+    if (!match)
+        return -1;
     const num = parseInt(match[1]);
     const unit = (match[2] || 'm').toLowerCase();
     switch (unit) {
@@ -286,9 +229,8 @@ function parseReminder(val: string): number {
         default: return num;
     }
 }
-
-function parseArgs(argv: string[]): ParsedArgs {
-    const result: ParsedArgs = {
+function parseArgs(argv) {
+    const result = {
         command: '',
         args: [],
         user: '',
@@ -300,8 +242,7 @@ function parseArgs(argv: string[]): ParsedArgs {
         icsFile: '',
         reminder: 60
     };
-
-    const unknown: string[] = [];
+    const unknown = [];
     let i = 0;
     while (i < argv.length) {
         const arg = argv[i];
@@ -342,30 +283,30 @@ function parseArgs(argv: string[]): ParsedArgs {
             default:
                 if (arg.startsWith('-')) {
                     unknown.push(arg);
-                } else if (!result.command) {
+                }
+                else if (!result.command) {
                     // Check if it's an .ics file
                     if (arg.toLowerCase().endsWith('.ics')) {
                         result.icsFile = arg;
                         result.command = 'import';
-                    } else {
+                    }
+                    else {
                         result.command = arg;
                     }
-                } else {
+                }
+                else {
                     result.args.push(arg);
                 }
         }
         i++;
     }
-
     if (unknown.length > 0) {
         console.error(`Unknown options: ${unknown.join(', ')}`);
         process.exit(1);
     }
-
     return result;
 }
-
-function resolveUser(cliUser: string, setAsDefault = false): string {
+function resolveUser(cliUser, setAsDefault = false) {
     if (cliUser) {
         const normalized = normalizeUser(cliUser);
         if (setAsDefault) {
@@ -375,20 +316,15 @@ function resolveUser(cliUser: string, setAsDefault = false): string {
         }
         return normalized;
     }
-
     const config = loadConfig();
     if (config.lastUser) {
         return config.lastUser;
     }
-
     return '';
 }
-
-async function main(): Promise<void> {
+async function main() {
     setupAbortHandler();
-
     const parsed = parseArgs(process.argv.slice(2));
-
     // Handle -defaultUser first (can be combined with other commands)
     if (parsed.defaultUser) {
         const normalized = normalizeUser(parsed.defaultUser);
@@ -396,23 +332,19 @@ async function main(): Promise<void> {
         config.lastUser = normalized;
         saveConfig(config);
         console.log(`Default user set to: ${normalized}`);
-
         // If no command, exit after setting default
         if (!parsed.command && !parsed.icsFile) {
             process.exit(0);
         }
     }
-
     if (parsed.help) {
         showUsage();
         process.exit(0);
     }
-
     if (!parsed.command) {
         showUsage();
         process.exit(1);
     }
-
     // Resolve user
     const user = resolveUser(parsed.user, false);
     if (!user) {
@@ -420,9 +352,7 @@ async function main(): Promise<void> {
         console.error('Use -u <email> for one-time, or -defaultUser <email> to set default.');
         process.exit(1);
     }
-
     console.log(`${ts()} User: ${user}`);
-
     switch (parsed.command) {
         case 'import': {
             const filePath = parsed.icsFile || parsed.args[0];
@@ -430,38 +360,32 @@ async function main(): Promise<void> {
                 console.error('Usage: gcal import <file.ics>  or  gcal <file.ics>');
                 process.exit(1);
             }
-
             const resolvedPath = path.resolve(filePath);
             if (!fs.existsSync(resolvedPath)) {
                 console.error(`File not found: ${resolvedPath}`);
                 process.exit(1);
             }
-
             console.log(`Importing: ${path.basename(resolvedPath)}`);
             console.log(`Calendar: ${parsed.calendar}\n`);
-
             const token = await getAccessToken(user, true);
             const result = await importIcsFile(resolvedPath, token, parsed.calendar);
-
             console.log(`\n${result.imported} event(s) imported`);
             if (result.errors.length > 0) {
                 console.log(`${result.errors.length} error(s)`);
             }
             break;
         }
-
         case 'list': {
             const count = parsed.args[0] ? parseInt(parsed.args[0]) : parsed.count;
             const token = await getAccessToken(user, false);
             const events = await listEvents(token, parsed.calendar, count);
-
             if (events.length === 0) {
                 console.log('No upcoming events found.');
-            } else {
+            }
+            else {
                 console.log(`\nUpcoming events (${events.length}):\n`);
-
                 // Build table data
-                const rows: string[][] = [];
+                const rows = [];
                 for (const event of events) {
                     const shortId = (event.id || '').slice(0, 8);
                     const start = event.start ? formatDateTime(event.start) : '?';
@@ -470,24 +394,20 @@ async function main(): Promise<void> {
                     const loc = event.location || '';
                     if (parsed.verbose) {
                         rows.push([shortId, start, duration, summary, loc, event.htmlLink || '']);
-                    } else {
+                    }
+                    else {
                         rows.push([shortId, start, duration, summary, loc]);
                     }
                 }
-
                 // Calculate column widths
                 const headers = parsed.verbose
                     ? ['ID', 'When', 'Dur', 'Event', 'Location', 'Link']
                     : ['ID', 'When', 'Dur', 'Event', 'Location'];
-                const colWidths = headers.map((h, i) =>
-                    Math.max(h.length, ...rows.map(r => (r[i] || '').length))
-                );
-
+                const colWidths = headers.map((h, i) => Math.max(h.length, ...rows.map(r => (r[i] || '').length)));
                 // Print header
                 const headerLine = headers.map((h, i) => h.padEnd(colWidths[i])).join('  ');
                 console.log(headerLine);
                 console.log(colWidths.map(w => '-'.repeat(w)).join('  '));
-
                 // Print rows
                 for (const row of rows) {
                     const line = row.map((cell, i) => (cell || '').padEnd(colWidths[i])).join('  ');
@@ -496,7 +416,6 @@ async function main(): Promise<void> {
             }
             break;
         }
-
         case 'past': {
             const count = parsed.args[0] ? parseInt(parsed.args[0]) : parsed.count;
             const token = await getAccessToken(user, false);
@@ -504,15 +423,14 @@ async function main(): Promise<void> {
             const now = new Date();
             const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
             const events = await listEvents(token, parsed.calendar, count, thirtyDaysAgo.toISOString(), now.toISOString());
-            events.reverse();  // Most recent first
-
+            events.reverse(); // Most recent first
             if (events.length === 0) {
                 console.log('No past events found in last 30 days.');
-            } else {
+            }
+            else {
                 console.log(`\nPast events (${events.length}):\n`);
-
                 // Build table data (same format as list)
-                const rows: string[][] = [];
+                const rows = [];
                 for (const event of events) {
                     const shortId = (event.id || '').slice(0, 8);
                     const start = event.start ? formatDateTime(event.start) : '?';
@@ -521,24 +439,20 @@ async function main(): Promise<void> {
                     const loc = event.location || '';
                     if (parsed.verbose) {
                         rows.push([shortId, start, duration, summary, loc, event.htmlLink || '']);
-                    } else {
+                    }
+                    else {
                         rows.push([shortId, start, duration, summary, loc]);
                     }
                 }
-
                 // Calculate column widths
                 const headers = parsed.verbose
                     ? ['ID', 'When', 'Dur', 'Event', 'Location', 'Link']
                     : ['ID', 'When', 'Dur', 'Event', 'Location'];
-                const colWidths = headers.map((h, i) =>
-                    Math.max(h.length, ...rows.map(r => (r[i] || '').length))
-                );
-
+                const colWidths = headers.map((h, i) => Math.max(h.length, ...rows.map(r => (r[i] || '').length)));
                 // Print header
                 const headerLine = headers.map((h, i) => h.padEnd(colWidths[i])).join('  ');
                 console.log(headerLine);
                 console.log(colWidths.map(w => '-'.repeat(w)).join('  '));
-
                 // Print rows
                 for (const row of rows) {
                     const line = row.map((cell, i) => (cell || '').padEnd(colWidths[i])).join('  ');
@@ -547,20 +461,17 @@ async function main(): Promise<void> {
             }
             break;
         }
-
         case 'add': {
             if (parsed.args.length < 2) {
                 console.error('Usage: gcal add <title> <when> [duration]');
                 console.error('Example: gcal add "Meeting" "tomorrow 2pm" "1h"');
                 process.exit(1);
             }
-
             const [title, when, duration = '1h'] = parsed.args;
             const startTime = parseDateTime(when);
             const durationMins = parseDuration(duration);
             const endTime = new Date(startTime.getTime() + durationMins * 60 * 1000);
-
-            const event: GoogleEvent = {
+            const event = {
                 summary: title,
                 start: {
                     dateTime: startTime.toISOString(),
@@ -571,14 +482,12 @@ async function main(): Promise<void> {
                     timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
                 }
             };
-
             if (parsed.reminder >= 0) {
                 event.reminders = {
                     useDefault: false,
                     overrides: [{ method: 'popup', minutes: parsed.reminder }]
                 };
             }
-
             const token = await getAccessToken(user, true);
             const created = await createEvent(token, event, parsed.calendar);
             console.log(`\nEvent created: ${created.summary}`);
@@ -593,7 +502,6 @@ async function main(): Promise<void> {
             }
             break;
         }
-
         case 'del':
         case 'delete': {
             if (parsed.args.length === 0) {
@@ -601,13 +509,10 @@ async function main(): Promise<void> {
                 console.error('Use "gcal list" to see event IDs');
                 process.exit(1);
             }
-
             const token = await getAccessToken(user, true);
             const events = await listEvents(token, parsed.calendar, 50);
-
             for (const idPrefix of parsed.args) {
                 const matches = events.filter(e => e.id?.startsWith(idPrefix));
-
                 if (matches.length === 0) {
                     console.error(`${idPrefix}: not found`);
                     continue;
@@ -619,18 +524,15 @@ async function main(): Promise<void> {
                     }
                     continue;
                 }
-
                 const event = matches[0];
-                await deleteEvent(token, event.id!, parsed.calendar);
+                await deleteEvent(token, event.id, parsed.calendar);
                 console.log(`Deleted: ${event.summary}`);
             }
             break;
         }
-
         case 'calendars': {
             const token = await getAccessToken(user, false);
             const calendars = await listCalendars(token);
-
             console.log(`\nCalendars (${calendars.length}):\n`);
             for (const cal of calendars) {
                 const primary = cal.primary ? ' (primary)' : '';
@@ -640,17 +542,16 @@ async function main(): Promise<void> {
             }
             break;
         }
-
         default:
             console.error(`Unknown command: ${parsed.command}`);
             showUsage();
             process.exit(1);
     }
 }
-
 if (import.meta.main) {
     main().catch(e => {
         console.error(`Error: ${e.message}`);
         process.exit(1);
     });
 }
+//# sourceMappingURL=gcal.js.map
