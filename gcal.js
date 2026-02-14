@@ -194,7 +194,7 @@ Options:
   -c, -calendar <id>       Calendar ID (default: primary)
   -n <count>               Number of events to list
   -v, -verbose             Show event IDs and links
-  -birthdays               Include birthday events in delete
+  -b, -birthdays            Include birthday events (hidden by default)
 
 Examples:
   gcal meeting.ics                        Import ICS file
@@ -250,6 +250,7 @@ function parseArgs(argv) {
             case '--verbose':
                 result.verbose = true;
                 break;
+            case '-b':
             case '-birthdays':
             case '--birthdays':
                 result.birthdays = true;
@@ -358,7 +359,10 @@ async function main() {
         case 'list': {
             const count = parsed.args[0] ? parseInt(parsed.args[0]) : parsed.count;
             const token = await getAccessToken(user, false);
-            const events = await listEvents(token, parsed.calendar, count);
+            let events = await listEvents(token, parsed.calendar, count);
+            if (!parsed.birthdays) {
+                events = events.filter(e => e.eventType !== 'birthday');
+            }
             if (events.length === 0) {
                 console.log('No upcoming events found.');
             }
@@ -370,7 +374,7 @@ async function main() {
                     const shortId = (event.id || '').slice(0, 8);
                     const start = event.start ? formatDateTime(event.start) : '?';
                     const duration = (event.start && event.end) ? formatDuration(event.start, event.end) : '';
-                    const summary = event.summary || '(no title)';
+                    const summary = (event.summary || '(no title)') + (event.eventType === 'birthday' ? ' [from contact]' : '');
                     const loc = event.location || '';
                     if (parsed.verbose) {
                         rows.push([shortId, start, duration, summary, loc, event.htmlLink || '']);
