@@ -1,6 +1,6 @@
 {
   "name": "@bobfrankston/gcal",
-  "version": "0.1.21",
+  "version": "0.1.22",
   "description": "Google Calendar CLI tool with ICS import support",
   "type": "module",
   "main": "gcal.js",
