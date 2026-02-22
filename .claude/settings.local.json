@@ -6,7 +6,8 @@
       "Bash(dir:*)",
       "Bash(npm ls:*)",
       "Bash(node:*)",
-      "Bash(where:*)"
+      "Bash(where:*)",
+      "Bash(cd \"y:/dev/utils/cardx/gcal\" && npm run release 2>&12)"
     ]
   }
 }

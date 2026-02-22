@@ -195,6 +195,11 @@ Options:
   -n <count>               Number of events to list
   -v, -verbose             Show event IDs and links
   -b, -birthdays            Include birthday events (hidden by default)
+  -r <spec>                Reminders: #m, #h, #d with optional :email/:popup
+                             -r 0          No reminders
+                             -r 30m        30 min popup (default kind)
+                             -r 1h:email   1 hour email
+                             -r 15m,1h     Multiple: comma-separated
 
 Examples:
   gcal meeting.ics                        Import ICS file
@@ -203,12 +208,39 @@ Examples:
   gcal add "Lunch" "1/14/2026 12:00" "1h"
   gcal add "Meeting" "tomorrow 10:00"
   gcal add "Appointment" "jan 15 2pm"
+  gcal add "Call" "tomorrow 3pm" "30m" -r 15m,1h:email
   gcal -defaultUser bob@gmail.com         Set default user
 
 File Association (Windows):
   assoc .ics=icsfile
   ftype icsfile=gcal "%1"
 `);
+}
+/** Parse a reminder spec like "30m", "1h", "2d", "30m:email", "1h:popup" */
+function parseReminder(spec) {
+    // Split on colon for method: "30m:email" or just "30m"
+    const [timePart, methodPart] = spec.split(':');
+    const method = methodPart === 'email' ? 'email' : 'popup';
+    const match = timePart.match(/^(\d+)\s*([mhd]?)$/i);
+    if (!match) {
+        console.error(`Invalid reminder: "${spec}" — use #m, #h, or #d (e.g. 30m, 1h, 2d)`);
+        process.exit(1);
+    }
+    const num = parseInt(match[1]);
+    const unit = (match[2] || 'm').toLowerCase();
+    let minutes;
+    switch (unit) {
+        case 'h':
+            minutes = num * 60;
+            break;
+        case 'd':
+            minutes = num * 60 * 24;
+            break;
+        default:
+            minutes = num;
+            break;
+    }
+    return { method, minutes };
 }
 function parseArgs(argv) {
     const result = {
@@ -221,7 +253,9 @@ function parseArgs(argv) {
         help: false,
         verbose: false,
         icsFile: '',
-        birthdays: false
+        birthdays: false,
+        reminders: [],
+        noReminders: false
     };
     const unknown = [];
     let i = 0;
@@ -255,6 +289,22 @@ function parseArgs(argv) {
             case '--birthdays':
                 result.birthdays = true;
                 break;
+            case '-r':
+            case '-reminder':
+            case '--reminder': {
+                const rval = argv[++i] || '';
+                if (rval === '0' || rval === 'none') {
+                    result.noReminders = true;
+                }
+                else {
+                    for (const part of rval.split(',')) {
+                        const reminder = parseReminder(part.trim());
+                        if (reminder)
+                            result.reminders.push(reminder);
+                    }
+                }
+                break;
+            }
             case '-h':
             case '-help':
             case '--help':
@@ -425,10 +475,27 @@ async function main() {
                     timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
                 }
             };
+            if (parsed.noReminders) {
+                event.reminders = { useDefault: false, overrides: [] };
+            }
+            else if (parsed.reminders.length > 0) {
+                event.reminders = { useDefault: false, overrides: parsed.reminders };
+            }
             const token = await getAccessToken(user, true);
             const created = await createEvent(token, event, parsed.calendar);
             console.log(`\nEvent created: ${created.summary}`);
             console.log(`  When: ${formatDateTime(created.start)} - ${formatDateTime(created.end)}`);
+            if (parsed.noReminders) {
+                console.log(`  Reminders: none`);
+            }
+            else if (parsed.reminders.length > 0) {
+                const rlist = parsed.reminders.map(r => {
+                    const mins = r.minutes;
+                    const label = mins >= 1440 ? `${mins / 1440}d` : mins >= 60 ? `${mins / 60}h` : `${mins}m`;
+                    return `${label}${r.method === 'email' ? ':email' : ''}`;
+                }).join(', ');
+                console.log(`  Reminders: ${rlist}`);
+            }
             if (created.htmlLink) {
                 console.log(`  Link: ${created.htmlLink}`);
             }
