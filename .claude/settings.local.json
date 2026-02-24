@@ -10,7 +10,8 @@
       "Bash(cd \"y:/dev/utils/cardx/gcal\" && npm run release 2>&12)",
       "Bash(reg query \"HKCU\\\\Software\\\\Classes\\\\.ics\" /ve 2>&1 && reg query \"HKCU\\\\Software\\\\Classes\\\\gcalFile\\\\shell\\\\open\\\\command\" /ve 2>&12)",
       "Bash(cmd.exe:*)",
-      "Bash(cd:*)"
+      "Bash(cd:*)",
+      "Bash(cd \"y:/dev/utils/cardx/gcal\" && npm run release 2>&122)"
     ]
   }
 }
