@@ -26,6 +26,7 @@
     "url": "git+https://github.com/BobFrankston/gcal.git"
   },
   "scripts": {
+    "postinstall": "node -e \"if(process.platform==='win32')console.log('\\nTip: run \\\"gcal assoc\\\" to associate .ics files with gcal')\"",
     "build": "tsc",
     "check": "tsc --noEmit",
     "prerelease:local": "git add -A && (git diff-index --quiet HEAD || git commit -m \"Pre-release commit\")",
