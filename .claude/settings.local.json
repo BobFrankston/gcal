@@ -11,7 +11,10 @@
       "Bash(reg query \"HKCU\\\\Software\\\\Classes\\\\.ics\" /ve 2>&1 && reg query \"HKCU\\\\Software\\\\Classes\\\\gcalFile\\\\shell\\\\open\\\\command\" /ve 2>&12)",
       "Bash(cmd.exe:*)",
       "Bash(cd:*)",
-      "Bash(cd \"y:/dev/utils/cardx/gcal\" && npm run release 2>&122)"
+      "Bash(cd \"y:/dev/utils/cardx/gcal\" && npm run release 2>&122)",
+      "Bash(cd \"y:/dev/utils/cardx/gcal\" && gcal list -limit 1y 2>&1)",
+      "Bash(cd \"y:/dev/utils/cardx/gcal\" && gcal update t2ov -title \"Political Update\" 2>&1)",
+      "Bash(cd \"y:/dev/utils/cardx/gcal\" && gcal list 2>&12)"
     ]
   }
 }
