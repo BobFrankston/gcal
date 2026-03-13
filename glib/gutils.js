@@ -209,12 +209,16 @@ export function parseDateTime(input) {
         d.setHours(h, parseInt(min || '0'), 0, 0);
         return d;
     }
-    // Handle weekday names
-    const weekdays = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-    const dayMatch = lower.match(/^(next\s+)?(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/i);
-    if (dayMatch) {
+    // Handle weekday names (full or 3-letter abbreviations)
+    const weekdayMap = {
+        sun: 0, sunday: 0, mon: 1, monday: 1, tue: 2, tuesday: 2,
+        wed: 3, wednesday: 3, thu: 4, thursday: 4, fri: 5, friday: 5,
+        sat: 6, saturday: 6
+    };
+    const dayMatch = lower.match(/^(next\s+)?([a-z]+)\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/i);
+    if (dayMatch && weekdayMap[dayMatch[2].toLowerCase()] !== undefined) {
         const [, next, day, hour, min, ampm] = dayMatch;
-        const targetDay = weekdays.indexOf(day.toLowerCase());
+        const targetDay = weekdayMap[day.toLowerCase()];
         const d = new Date(now);
         let daysUntil = targetDay - d.getDay();
         if (daysUntil <= 0 || next)

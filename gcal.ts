@@ -313,7 +313,7 @@ Options:
 Examples:
   gcal meeting.ics                        Import ICS file
   gcal list                               List next 10 events
-  gcal add "Dentist" "Friday 3pm" "1h"
+  gcal add "Dentist" "fri 3pm" "1h"
   gcal add "Lunch" "1/14/2026 12:00" "1h"
   gcal add "Meeting" "tomorrow 10:00"
   gcal add "Appointment" "jan 15 2pm"
