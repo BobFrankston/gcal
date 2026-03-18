@@ -258,6 +258,18 @@ function setupFileAssociation(): void {
     }
 }
 
+/** Format reminders compactly: "30m", "1h:email", "30m,1h:email", "def", "" */
+function formatReminders(reminders?: { useDefault?: boolean; overrides?: EventReminder[] }): string {
+    if (!reminders) return '';
+    if (reminders.useDefault) return 'def';
+    if (!reminders.overrides || reminders.overrides.length === 0) return '';
+    return reminders.overrides.map(r => {
+        const mins = r.minutes || 0;
+        const label = mins >= 1440 ? `${mins / 1440}d` : mins >= 60 ? `${mins / 60}h` : `${mins}m`;
+        return `${label}${r.method === 'email' ? ':email' : ''}`;
+    }).join(',');
+}
+
 /** Clean up URLs — replace https URLs with [sitename] labels */
 function cleanUrls(text: string): string {
     if (!text) return text;
@@ -317,6 +329,7 @@ Examples:
   gcal add "Lunch" "1/14/2026 12:00" "1h"
   gcal add "Meeting" "tomorrow 10:00"
   gcal add "Appointment" "jan 15 2pm"
+  gcal add "Lunch" "tomorrow noon" "1h"
   gcal add "Call" "tomorrow 3pm" "30m" -r 15m,1h:email
   gcal update abc1 -title "New Title" -loc "Room 5"
   gcal update abc1 -start "friday 3pm" -dur 2h
@@ -628,17 +641,18 @@ async function main(): Promise<void> {
                     const duration = (event.start && event.end) ? formatDuration(event.start, event.end) : '';
                     const summary = cleanUrls(event.summary || '(no title)') + (event.eventType === 'birthday' ? ' [from contact]' : '');
                     const loc = cleanUrls(event.location || '');
+                    const rem = formatReminders(event.reminders);
                     if (parsed.verbose) {
-                        rows.push([shortId, start, duration, summary, loc, event.htmlLink || '']);
+                        rows.push([shortId, start, duration, summary, rem, loc, event.htmlLink || '']);
                     } else {
-                        rows.push([shortId, start, duration, summary, loc]);
+                        rows.push([shortId, start, duration, summary, rem, loc]);
                     }
                 }
 
                 // Calculate column widths
                 const headers = parsed.verbose
-                    ? ['ID', 'When', 'Dur', 'Event', 'Location', 'Link']
-                    : ['ID', 'When', 'Dur', 'Event', 'Location'];
+                    ? ['ID', 'When', 'Dur', 'Event', 'Rem', 'Location', 'Link']
+                    : ['ID', 'When', 'Dur', 'Event', 'Rem', 'Location'];
                 const colWidths = headers.map((h, i) =>
                     Math.max(h.length, ...rows.map(r => (r[i] || '').length))
                 );

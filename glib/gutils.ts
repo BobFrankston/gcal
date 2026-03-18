@@ -229,16 +229,20 @@ export function parseDateTime(input: string): Date {
         return d;
     }
 
-    // Handle "tomorrow 2pm" or "tomorrow at 2pm"
-    const relMatch = lower.match(/^(today|tomorrow)\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/i);
+    // Handle "today noon", "tomorrow noon", "today/tomorrow <time>"
+    const relMatch = lower.match(/^(today|tomorrow)\s+(?:at\s+)?(?:(\d{1,2})(?::(\d{2}))?\s*(am|pm)?|(noon))$/i);
     if (relMatch) {
-        const [, rel, hour, min, ampm] = relMatch;
+        const [, rel, hour, min, ampm, noon] = relMatch;
         const d = new Date(now);
         if (rel === 'tomorrow') d.setDate(d.getDate() + 1);
-        let h = parseInt(hour);
-        if (ampm?.toLowerCase() === 'pm' && h < 12) h += 12;
-        if (ampm?.toLowerCase() === 'am' && h === 12) h = 0;
-        d.setHours(h, parseInt(min || '0'), 0, 0);
+        if (noon) {
+            d.setHours(12, 0, 0, 0);
+        } else {
+            let h = parseInt(hour);
+            if (ampm?.toLowerCase() === 'pm' && h < 12) h += 12;
+            if (ampm?.toLowerCase() === 'am' && h === 12) h = 0;
+            d.setHours(h, parseInt(min || '0'), 0, 0);
+        }
         return d;
     }
 
@@ -248,29 +252,35 @@ export function parseDateTime(input: string): Date {
         wed: 3, wednesday: 3, thu: 4, thursday: 4, fri: 5, friday: 5,
         sat: 6, saturday: 6
     };
-    const dayMatch = lower.match(/^(next\s+)?([a-z]+)\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/i);
+    const dayMatch = lower.match(/^(next\s+)?([a-z]+)\s+(?:at\s+)?(?:(\d{1,2})(?::(\d{2}))?\s*(am|pm)?|(noon))$/i);
     if (dayMatch && weekdayMap[dayMatch[2].toLowerCase()] !== undefined) {
-        const [, next, day, hour, min, ampm] = dayMatch;
+        const [, next, day, hour, min, ampm, noon] = dayMatch;
         const targetDay = weekdayMap[day.toLowerCase()];
         const d = new Date(now);
         let daysUntil = targetDay - d.getDay();
         if (daysUntil <= 0 || next) daysUntil += 7;
         d.setDate(d.getDate() + daysUntil);
-        let h = parseInt(hour);
-        if (ampm?.toLowerCase() === 'pm' && h < 12) h += 12;
-        if (ampm?.toLowerCase() === 'am' && h === 12) h = 0;
-        d.setHours(h, parseInt(min || '0'), 0, 0);
+        if (noon) {
+            d.setHours(12, 0, 0, 0);
+        } else {
+            let h = parseInt(hour);
+            if (ampm?.toLowerCase() === 'pm' && h < 12) h += 12;
+            if (ampm?.toLowerCase() === 'am' && h === 12) h = 0;
+            d.setHours(h, parseInt(min || '0'), 0, 0);
+        }
         return d;
     }
 
     // Handle month names: "jan 15", "jan 15 2026", "jan 15 3pm", "january 15 2026 3pm"
     const months = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
-    const monthMatch = lower.match(/^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+(\d{1,2})(?:\s+(\d{4}))?(?:\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?)?$/i);
+    const monthMatch = lower.match(/^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+(\d{1,2})(?:\s+(\d{4}))?(?:\s+(?:at\s+)?(?:(\d{1,2})(?::(\d{2}))?\s*(am|pm)?|(noon)))?$/i);
     if (monthMatch) {
-        const [, month, day, year, hour, min, ampm] = monthMatch;
+        const [, month, day, year, hour, min, ampm, noon] = monthMatch;
         const monthIndex = months.findIndex(m => month.toLowerCase().startsWith(m));
         const d = new Date(parseInt(year || now.getFullYear().toString()), monthIndex, parseInt(day));
-        if (hour) {
+        if (noon) {
+            d.setHours(12, 0, 0, 0);
+        } else if (hour) {
             let h = parseInt(hour);
             if (ampm?.toLowerCase() === 'pm' && h < 12) h += 12;
             if (ampm?.toLowerCase() === 'am' && h === 12) h = 0;
@@ -308,6 +318,13 @@ export function parseDateTime(input: string): Date {
         const [, hour, min] = timeMatch;
         const d = new Date(now);
         d.setHours(parseInt(hour), parseInt(min), 0, 0);
+        return d;
+    }
+
+    // Handle "noon" standalone - assume today
+    if (lower === 'noon') {
+        const d = new Date(now);
+        d.setHours(12, 0, 0, 0);
         return d;
     }
 
