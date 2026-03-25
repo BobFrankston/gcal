@@ -20,7 +20,10 @@
       "Bash(ls:*)",
       "Read(//c/Users/Bob/Downloads/**)",
       "Read(//y/dev/utils/cardx/gcal/$APPDATA/gcards/**)",
-      "Read(//y/dev/utils/cardx/gcal/$APPDATA/gcal/**)"
+      "Read(//y/dev/utils/cardx/gcal/$APPDATA/gcal/**)",
+      "Bash(npm root:*)",
+      "Bash(git:*)",
+      "Bash(npm pack:*)"
     ]
   }
 }
