@@ -4,7 +4,8 @@
  * Manage Google Calendar events with ICS import support
  *
  * Can be associated with .ics files for direct import:
- *   gcal assoc
+ *   assoc .ics=icsfile
+ *   ftype icsfile=gcal "%1"
  */
 export {};
 //# sourceMappingURL=gcal.d.ts.map

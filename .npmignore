@@ -25,3 +25,4 @@ package-lock.json
 token*
 tsconfig.json
 .globalize.json5
+.claude/

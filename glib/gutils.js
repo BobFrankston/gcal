@@ -22,8 +22,8 @@ export function getDataDir() {
 }
 export const DATA_DIR = getDataDir();
 export const CONFIG_FILE = path.join(getAppDir(), 'config.json');
-/** Use credentials from gcards (shared OAuth app) */
-export const CREDENTIALS_FILE = path.join(path.dirname(APP_DIR), 'gcards', 'credentials.json');
+/** OAuth credentials shipped with the package */
+export const CREDENTIALS_FILE = path.join(APP_DIR, 'gcal-credentials.json');
 export function loadConfig() {
     if (fs.existsSync(CONFIG_FILE)) {
         try {
@@ -194,65 +194,48 @@ export function parseDateTime(input) {
         d.setDate(d.getDate() + 1);
         return d;
     }
-    // Handle "today noon", "tomorrow noon", "today/tomorrow <time>"
-    const relMatch = lower.match(/^(today|tomorrow)\s+(?:at\s+)?(?:(\d{1,2})(?::(\d{2}))?\s*(am|pm)?|(noon))$/i);
+    // Handle "tomorrow 2pm" or "tomorrow at 2pm"
+    const relMatch = lower.match(/^(today|tomorrow)\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/i);
     if (relMatch) {
-        const [, rel, hour, min, ampm, noon] = relMatch;
+        const [, rel, hour, min, ampm] = relMatch;
         const d = new Date(now);
         if (rel === 'tomorrow')
             d.setDate(d.getDate() + 1);
-        if (noon) {
-            d.setHours(12, 0, 0, 0);
-        }
-        else {
-            let h = parseInt(hour);
-            if (ampm?.toLowerCase() === 'pm' && h < 12)
-                h += 12;
-            if (ampm?.toLowerCase() === 'am' && h === 12)
-                h = 0;
-            d.setHours(h, parseInt(min || '0'), 0, 0);
-        }
+        let h = parseInt(hour);
+        if (ampm?.toLowerCase() === 'pm' && h < 12)
+            h += 12;
+        if (ampm?.toLowerCase() === 'am' && h === 12)
+            h = 0;
+        d.setHours(h, parseInt(min || '0'), 0, 0);
         return d;
     }
-    // Handle weekday names (full or 3-letter abbreviations)
-    const weekdayMap = {
-        sun: 0, sunday: 0, mon: 1, monday: 1, tue: 2, tuesday: 2,
-        wed: 3, wednesday: 3, thu: 4, thursday: 4, fri: 5, friday: 5,
-        sat: 6, saturday: 6
-    };
-    const dayMatch = lower.match(/^(next\s+)?([a-z]+)\s+(?:at\s+)?(?:(\d{1,2})(?::(\d{2}))?\s*(am|pm)?|(noon))$/i);
-    if (dayMatch && weekdayMap[dayMatch[2].toLowerCase()] !== undefined) {
-        const [, next, day, hour, min, ampm, noon] = dayMatch;
-        const targetDay = weekdayMap[day.toLowerCase()];
+    // Handle weekday names
+    const weekdays = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+    const dayMatch = lower.match(/^(next\s+)?(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/i);
+    if (dayMatch) {
+        const [, next, day, hour, min, ampm] = dayMatch;
+        const targetDay = weekdays.indexOf(day.toLowerCase());
         const d = new Date(now);
         let daysUntil = targetDay - d.getDay();
         if (daysUntil <= 0 || next)
             daysUntil += 7;
         d.setDate(d.getDate() + daysUntil);
-        if (noon) {
-            d.setHours(12, 0, 0, 0);
-        }
-        else {
-            let h = parseInt(hour);
-            if (ampm?.toLowerCase() === 'pm' && h < 12)
-                h += 12;
-            if (ampm?.toLowerCase() === 'am' && h === 12)
-                h = 0;
-            d.setHours(h, parseInt(min || '0'), 0, 0);
-        }
+        let h = parseInt(hour);
+        if (ampm?.toLowerCase() === 'pm' && h < 12)
+            h += 12;
+        if (ampm?.toLowerCase() === 'am' && h === 12)
+            h = 0;
+        d.setHours(h, parseInt(min || '0'), 0, 0);
         return d;
     }
     // Handle month names: "jan 15", "jan 15 2026", "jan 15 3pm", "january 15 2026 3pm"
     const months = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
-    const monthMatch = lower.match(/^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+(\d{1,2})(?:\s+(\d{4}))?(?:\s+(?:at\s+)?(?:(\d{1,2})(?::(\d{2}))?\s*(am|pm)?|(noon)))?$/i);
+    const monthMatch = lower.match(/^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+(\d{1,2})(?:\s+(\d{4}))?(?:\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?)?$/i);
     if (monthMatch) {
-        const [, month, day, year, hour, min, ampm, noon] = monthMatch;
+        const [, month, day, year, hour, min, ampm] = monthMatch;
         const monthIndex = months.findIndex(m => month.toLowerCase().startsWith(m));
         const d = new Date(parseInt(year || now.getFullYear().toString()), monthIndex, parseInt(day));
-        if (noon) {
-            d.setHours(12, 0, 0, 0);
-        }
-        else if (hour) {
+        if (hour) {
             let h = parseInt(hour);
             if (ampm?.toLowerCase() === 'pm' && h < 12)
                 h += 12;
@@ -290,12 +273,6 @@ export function parseDateTime(input) {
         const [, hour, min] = timeMatch;
         const d = new Date(now);
         d.setHours(parseInt(hour), parseInt(min), 0, 0);
-        return d;
-    }
-    // Handle "noon" standalone - assume today
-    if (lower === 'noon') {
-        const d = new Date(now);
-        d.setHours(12, 0, 0, 0);
         return d;
     }
     // Handle time with am/pm (2pm, 10am, 2:30pm) - assume today

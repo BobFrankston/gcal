@@ -4,11 +4,11 @@
  * Manage Google Calendar events with ICS import support
  *
  * Can be associated with .ics files for direct import:
- *   gcal assoc
+ *   assoc .ics=icsfile
+ *   ftype icsfile=gcal "%1"
  */
 import fs from 'fs';
 import path from 'path';
-import { execSync } from 'child_process';
 import { authenticateOAuth } from '@bobfrankston/oauthsupport';
 import { CREDENTIALS_FILE, loadConfig, saveConfig, getUserPaths, ensureUserDir, formatDateTime, formatDuration, parseDuration, parseDateTime, ts, normalizeUser } from './glib/gutils.js';
 const CALENDAR_API_BASE = 'https://www.googleapis.com/calendar/v3';
@@ -17,9 +17,15 @@ const CALENDAR_SCOPE_WRITE = 'https://www.googleapis.com/auth/calendar';
 let abortController = null;
 function setupAbortHandler() {
     abortController = new AbortController();
+    let ctrlCCount = 0;
     process.on('SIGINT', () => {
+        ctrlCCount++;
         abortController?.abort();
-        console.log('\n\nCtrl+C pressed - aborting...');
+        if (ctrlCCount >= 2) {
+            console.log('\n\nForce exit.');
+            process.exit(1);
+        }
+        console.log('\n\nCtrl+C pressed - aborting... (press again to force exit)');
     });
 }
 async function getAccessToken(user, writeAccess = false, forceRefresh = false) {
@@ -43,7 +49,7 @@ async function getAccessToken(user, writeAccess = false, forceRefresh = false) {
         scope,
         tokenDirectory: paths.userDir,
         tokenFileName,
-        credentialsKey: 'web',
+        credentialsKey: 'installed',
         signal: abortController?.signal
     });
     if (!token) {
@@ -68,15 +74,13 @@ async function listCalendars(accessToken) {
     const data = await res.json();
     return data.items || [];
 }
-async function listEvents(accessToken, calendarId = 'primary', maxResults = 10, timeMin, timeMax) {
+async function listEvents(accessToken, calendarId = 'primary', maxResults = 10, timeMin) {
     const params = new URLSearchParams({
         maxResults: maxResults.toString(),
         singleEvents: 'true',
         orderBy: 'startTime',
         timeMin: timeMin || new Date().toISOString()
     });
-    if (timeMax)
-        params.set('timeMax', timeMax);
     const url = `${CALENDAR_API_BASE}/calendars/${encodeURIComponent(calendarId)}/events?${params}`;
     const res = await apiFetch(url, accessToken);
     if (!res.ok) {
@@ -104,18 +108,6 @@ async function deleteEvent(accessToken, eventId, calendarId = 'primary') {
         const errText = await res.text();
         throw new Error(`Failed to delete event: ${res.status} ${errText}`);
     }
-}
-async function updateEvent(accessToken, eventId, body, calendarId = 'primary') {
-    const url = `${CALENDAR_API_BASE}/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`;
-    const res = await apiFetch(url, accessToken, {
-        method: 'PATCH',
-        body: JSON.stringify(body)
-    });
-    if (!res.ok) {
-        const errText = await res.text();
-        throw new Error(`Failed to update event: ${res.status} ${errText}`);
-    }
-    return await res.json();
 }
 async function importIcsFile(filePath, accessToken, calendarId = 'primary') {
     const ICAL = await import('ical.js');
@@ -186,53 +178,6 @@ async function importIcsFile(filePath, accessToken, calendarId = 'primary') {
     }
     return result;
 }
-function setupFileAssociation() {
-    if (process.platform !== 'win32') {
-        console.error('File association is only supported on Windows.');
-        process.exit(1);
-    }
-    const classKey = 'HKCU\\Software\\Classes';
-    const command = `cmd.exe /c gcal "%1"`;
-    try {
-        execSync(`reg add "${classKey}\\.ics" /ve /d "gcalFile" /f`, { stdio: 'pipe' });
-        execSync(`reg add "${classKey}\\gcalFile\\shell\\open\\command" /ve /d "${command}" /f`, { stdio: 'pipe' });
-        console.log('.ics file association set — double-click any .ics to import via gcal');
-    }
-    catch (e) {
-        console.error(`Failed to set file association: ${e.message}`);
-        process.exit(1);
-    }
-}
-/** Format reminders compactly: "30m", "1h:email", "30m,1h:email", "def", "" */
-function formatReminders(reminders) {
-    if (!reminders)
-        return '';
-    if (reminders.useDefault)
-        return 'def';
-    if (!reminders.overrides || reminders.overrides.length === 0)
-        return '';
-    return reminders.overrides.map(r => {
-        const mins = r.minutes || 0;
-        const label = mins >= 1440 ? `${mins / 1440}d` : mins >= 60 ? `${mins / 60}h` : `${mins}m`;
-        return `${label}${r.method === 'email' ? ':email' : ''}`;
-    }).join(',');
-}
-/** Clean up URLs — replace https URLs with [sitename] labels */
-function cleanUrls(text) {
-    if (!text)
-        return text;
-    return text.replace(/https?:\/\/([^\/\s]+)\S*/gi, (_match, host) => {
-        // Extract meaningful site name from hostname
-        const parts = host.split('.');
-        // Drop common prefixes (www, us02web, events, etc.) and TLD suffixes
-        // Keep the main domain name: "us02web.zoom.us" → "Zoom", "events.vtools.ieee.org" → "ieee"
-        if (parts.length >= 2) {
-            const domain = parts.length > 2 ? parts[parts.length - 2] : parts[0];
-            return `[${domain.charAt(0).toUpperCase() + domain.slice(1)}]`;
-        }
-        return '[link]';
-    });
-}
 function showUsage() {
     console.log(`
 gcal - Google Calendar CLI
@@ -245,10 +190,8 @@ Commands:
   list [n]                           List upcoming n events (default: 10)
   add <title> <when> [duration]      Add event
   del|delete <id> [id2...]           Delete event(s) by ID (prefix match)
-  update <id> [flags]                Update event by ID (prefix match)
   import <file.ics>                  Import events from ICS file
   calendars                          List available calendars
-  assoc                              Associate .ics files with gcal (Windows)
   help                               Show this help
 
 Options:
@@ -256,88 +199,22 @@ Options:
   -defaultUser <email>     Set default user for future use
   -c, -calendar <id>       Calendar ID (default: primary)
   -n <count>               Number of events to list
-  -limit <span>            Time horizon for list: #d, #w, #m, #y (default: 3m)
   -v, -verbose             Show event IDs and links
   -b, -birthdays            Include birthday events (hidden by default)
-  -title <text>            New title (update command)
-  -loc <text>              New location (update command)
-  -start <when>            New start time (update command)
-  -dur <duration>          New duration (update command)
-  -r <spec>                Reminders: #m, #h, #d with optional :email/:popup
-                             -r 0          No reminders
-                             -r 30m        30 min popup (default kind)
-                             -r 1h:email   1 hour email
-                             -r 15m,1h     Multiple: comma-separated
 
 Examples:
   gcal meeting.ics                        Import ICS file
   gcal list                               List next 10 events
-  gcal add "Dentist" "fri 3pm" "1h"
+  gcal add "Dentist" "Friday 3pm" "1h"
   gcal add "Lunch" "1/14/2026 12:00" "1h"
   gcal add "Meeting" "tomorrow 10:00"
   gcal add "Appointment" "jan 15 2pm"
-  gcal add "Lunch" "tomorrow noon" "1h"
-  gcal add "Call" "tomorrow 3pm" "30m" -r 15m,1h:email
-  gcal update abc1 -title "New Title" -loc "Room 5"
-  gcal update abc1 -start "friday 3pm" -dur 2h
-  gcal update abc1 -r 15m,1h:email
   gcal -defaultUser bob@gmail.com         Set default user
 
 File Association (Windows):
-  gcal assoc                              Set up .ics file association
+  assoc .ics=icsfile
+  ftype icsfile=gcal "%1"
 `);
-}
-/** Parse a reminder spec like "30m", "1h", "2d", "30m:email", "1h:popup" */
-function parseReminder(spec) {
-    // Split on colon for method: "30m:email" or just "30m"
-    const [timePart, methodPart] = spec.split(':');
-    const method = methodPart === 'email' ? 'email' : 'popup';
-    const match = timePart.match(/^(\d+)\s*([mhd]?)$/i);
-    if (!match) {
-        console.error(`Invalid reminder: "${spec}" — use #m, #h, or #d (e.g. 30m, 1h, 2d)`);
-        process.exit(1);
-    }
-    const num = parseInt(match[1]);
-    const unit = (match[2] || 'm').toLowerCase();
-    let minutes;
-    switch (unit) {
-        case 'h':
-            minutes = num * 60;
-            break;
-        case 'd':
-            minutes = num * 60 * 24;
-            break;
-        default:
-            minutes = num;
-            break;
-    }
-    return { method, minutes };
-}
-/** Parse a time limit spec like "3m", "1y", "2w", "90d" into a future Date */
-function parseTimeLimit(spec) {
-    const match = spec.match(/^(\d+)\s*([dwmy]?)$/i);
-    if (!match) {
-        console.error(`Invalid time limit: "${spec}" — use #d, #w, #m, or #y (e.g. 3m, 90d, 1y)`);
-        process.exit(1);
-    }
-    const num = parseInt(match[1]);
-    const unit = (match[2] || 'm').toLowerCase();
-    const now = new Date();
-    switch (unit) {
-        case 'd':
-            now.setDate(now.getDate() + num);
-            break;
-        case 'w':
-            now.setDate(now.getDate() + num * 7);
-            break;
-        case 'y':
-            now.setFullYear(now.getFullYear() + num);
-            break;
-        default:
-            now.setMonth(now.getMonth() + num);
-            break; // 'm' = months
-    }
-    return now;
 }
 function parseArgs(argv) {
     const result = {
@@ -350,14 +227,7 @@ function parseArgs(argv) {
         help: false,
         verbose: false,
         icsFile: '',
-        birthdays: false,
-        reminders: [],
-        noReminders: false,
-        timeLimit: '3m',
-        title: '',
-        location: '',
-        startTime: '',
-        duration: ''
+        birthdays: false
     };
     const unknown = [];
     let i = 0;
@@ -391,44 +261,6 @@ function parseArgs(argv) {
             case '--birthdays':
                 result.birthdays = true;
                 break;
-            case '-limit':
-            case '--limit':
-                result.timeLimit = argv[++i] || '3m';
-                break;
-            case '-title':
-            case '--title':
-                result.title = argv[++i] || '';
-                break;
-            case '-loc':
-            case '-location':
-            case '--location':
-                result.location = argv[++i] || '';
-                break;
-            case '-start':
-            case '--start':
-                result.startTime = argv[++i] || '';
-                break;
-            case '-dur':
-            case '-duration':
-            case '--duration':
-                result.duration = argv[++i] || '';
-                break;
-            case '-r':
-            case '-reminder':
-            case '--reminder': {
-                const rval = argv[++i] || '';
-                if (rval === '0' || rval === 'none') {
-                    result.noReminders = true;
-                }
-                else {
-                    for (const part of rval.split(',')) {
-                        const reminder = parseReminder(part.trim());
-                        if (reminder)
-                            result.reminders.push(reminder);
-                    }
-                }
-                break;
-            }
             case '-h':
             case '-help':
             case '--help':
@@ -456,8 +288,7 @@ function parseArgs(argv) {
         i++;
     }
     if (unknown.length > 0) {
-        console.error(`Unknown options: ${unknown.join(', ')}\n`);
-        showUsage();
+        console.error(`Unknown options: ${unknown.join(', ')}`);
         process.exit(1);
     }
     return result;
@@ -501,11 +332,6 @@ async function main() {
         showUsage();
         process.exit(1);
     }
-    // Commands that don't need a user
-    if (parsed.command === 'assoc') {
-        setupFileAssociation();
-        process.exit(0);
-    }
     // Resolve user
     const user = resolveUser(parsed.user, false);
     if (!user) {
@@ -538,9 +364,8 @@ async function main() {
         }
         case 'list': {
             const count = parsed.args[0] ? parseInt(parsed.args[0]) : parsed.count;
-            const timeMax = parseTimeLimit(parsed.timeLimit).toISOString();
             const token = await getAccessToken(user, false);
-            let events = await listEvents(token, parsed.calendar, count, undefined, timeMax);
+            let events = await listEvents(token, parsed.calendar, count);
             const birthdayCount = events.filter(e => e.eventType === 'birthday').length;
             if (!parsed.birthdays) {
                 events = events.filter(e => e.eventType !== 'birthday');
@@ -556,29 +381,27 @@ async function main() {
                     const shortId = (event.id || '').slice(0, 8);
                     const start = event.start ? formatDateTime(event.start) : '?';
                     const duration = (event.start && event.end) ? formatDuration(event.start, event.end) : '';
-                    const summary = cleanUrls(event.summary || '(no title)') + (event.eventType === 'birthday' ? ' [from contact]' : '');
-                    const loc = cleanUrls(event.location || '');
-                    const rem = formatReminders(event.reminders);
+                    const summary = (event.summary || '(no title)') + (event.eventType === 'birthday' ? ' [from contact]' : '');
+                    const loc = event.location || '';
                     if (parsed.verbose) {
-                        rows.push([shortId, start, duration, summary, rem, loc, event.htmlLink || '']);
+                        rows.push([shortId, start, duration, summary, loc, event.htmlLink || '']);
                     }
                     else {
-                        rows.push([shortId, start, duration, summary, rem, loc]);
+                        rows.push([shortId, start, duration, summary, loc]);
                     }
                 }
                 // Calculate column widths
                 const headers = parsed.verbose
-                    ? ['ID', 'When', 'Dur', 'Event', 'Rem', 'Location', 'Link']
-                    : ['ID', 'When', 'Dur', 'Event', 'Rem', 'Location'];
+                    ? ['ID', 'When', 'Dur', 'Event', 'Location', 'Link']
+                    : ['ID', 'When', 'Dur', 'Event', 'Location'];
                 const colWidths = headers.map((h, i) => Math.max(h.length, ...rows.map(r => (r[i] || '').length)));
                 // Print header
-                const headerLine = headers.map((h, i) => h.padEnd(colWidths[i])).join(' ');
+                const headerLine = headers.map((h, i) => h.padEnd(colWidths[i])).join('  ');
                 console.log(headerLine);
-                console.log(colWidths.map(w => '-'.repeat(w)).join(' '));
-                // Print rows — last column not padded to avoid trailing whitespace
+                console.log(colWidths.map(w => '-'.repeat(w)).join('  '));
+                // Print rows
                 for (const row of rows) {
-                    const lastIdx = row.length - 1;
-                    const line = row.map((cell, i) => i < lastIdx ? (cell || '').padEnd(colWidths[i]) : (cell || '')).join(' ');
+                    const line = row.map((cell, i) => (cell || '').padEnd(colWidths[i])).join('  ');
                     console.log(line);
                 }
             }
@@ -608,27 +431,10 @@ async function main() {
                     timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
                 }
             };
-            if (parsed.noReminders) {
-                event.reminders = { useDefault: false, overrides: [] };
-            }
-            else if (parsed.reminders.length > 0) {
-                event.reminders = { useDefault: false, overrides: parsed.reminders };
-            }
             const token = await getAccessToken(user, true);
             const created = await createEvent(token, event, parsed.calendar);
             console.log(`\nEvent created: ${created.summary}`);
             console.log(`  When: ${formatDateTime(created.start)} - ${formatDateTime(created.end)}`);
-            if (parsed.noReminders) {
-                console.log(`  Reminders: none`);
-            }
-            else if (parsed.reminders.length > 0) {
-                const rlist = parsed.reminders.map(r => {
-                    const mins = r.minutes;
-                    const label = mins >= 1440 ? `${mins / 1440}d` : mins >= 60 ? `${mins / 60}h` : `${mins}m`;
-                    return `${label}${r.method === 'email' ? ':email' : ''}`;
-                }).join(', ');
-                console.log(`  Reminders: ${rlist}`);
-            }
             if (created.htmlLink) {
                 console.log(`  Link: ${created.htmlLink}`);
             }
@@ -652,12 +458,7 @@ async function main() {
                 if (matches.length > 1) {
                     console.error(`${idPrefix}: ambiguous (${matches.length} matches)`);
                     for (const e of matches) {
-                        // Show enough ID to distinguish recurring instances (base_date)
-                        const displayId = (e.id || '').length > 12 ? e.id.slice(0, 16) : e.id?.slice(0, 8);
-                        const cleaned = cleanUrls(e.summary || '');
-                        const summary = cleaned.length > 60 ? cleaned.slice(0, 57) + '...' : cleaned;
-                        const when = e.start ? formatDateTime(e.start) : '';
-                        console.error(`  ${displayId} ${when} ${summary}`);
+                        console.error(`  ${e.id?.slice(0, 8)} - ${e.summary}`);
                     }
                     continue;
                 }
@@ -667,7 +468,7 @@ async function main() {
                     continue;
                 }
                 await deleteEvent(token, event.id, parsed.calendar);
-                console.log(`Deleted: ${cleanUrls(event.summary || '')}`);
+                console.log(`Deleted: ${event.summary}`);
             }
             break;
         }
@@ -683,99 +484,6 @@ async function main() {
             }
             break;
         }
-        case 'update': {
-            if (parsed.args.length === 0) {
-                console.error('Usage: gcal update <id> [-title "..."] [-loc "..."] [-start "..."] [-dur "..."] [-r ...]');
-                console.error('Use "gcal list -v" to see event IDs');
-                process.exit(1);
-            }
-            const idPrefix = parsed.args[0];
-            const token = await getAccessToken(user, true);
-            const events = await listEvents(token, parsed.calendar, 50);
-            const matches = events.filter(e => e.id?.startsWith(idPrefix));
-            if (matches.length === 0) {
-                console.error(`${idPrefix}: not found`);
-                process.exit(1);
-            }
-            if (matches.length > 1) {
-                console.error(`${idPrefix}: ambiguous (${matches.length} matches)`);
-                for (const e of matches) {
-                    const displayId = (e.id || '').length > 12 ? e.id.slice(0, 16) : e.id?.slice(0, 8);
-                    const cleaned = cleanUrls(e.summary || '');
-                    const summary = cleaned.length > 60 ? cleaned.slice(0, 57) + '...' : cleaned;
-                    const when = e.start ? formatDateTime(e.start) : '';
-                    console.error(`  ${displayId} ${when} ${summary}`);
-                }
-                process.exit(1);
-            }
-            const target = matches[0];
-            const body = {};
-            const changes = [];
-            if (parsed.title) {
-                body.summary = parsed.title;
-                changes.push(`title → "${parsed.title}"`);
-            }
-            if (parsed.location) {
-                body.location = parsed.location;
-                changes.push(`location → "${parsed.location}"`);
-            }
-            if (parsed.startTime) {
-                const newStart = parseDateTime(parsed.startTime);
-                const durationMs = parsed.duration
-                    ? parseDuration(parsed.duration) * 60 * 1000
-                    : (target.end?.dateTime && target.start?.dateTime)
-                        ? new Date(target.end.dateTime).getTime() - new Date(target.start.dateTime).getTime()
-                        : 60 * 60 * 1000;
-                const newEnd = new Date(newStart.getTime() + durationMs);
-                const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-                body.start = { dateTime: newStart.toISOString(), timeZone: tz };
-                body.end = { dateTime: newEnd.toISOString(), timeZone: tz };
-                changes.push(`start → ${formatDateTime(body.start)}`);
-                if (parsed.duration)
-                    changes.push(`duration → ${parsed.duration}`);
-            }
-            else if (parsed.duration) {
-                // Duration change without start change — shift end time
-                if (target.start?.dateTime) {
-                    const startMs = new Date(target.start.dateTime).getTime();
-                    const newEnd = new Date(startMs + parseDuration(parsed.duration) * 60 * 1000);
-                    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-                    body.end = { dateTime: newEnd.toISOString(), timeZone: tz };
-                    changes.push(`duration → ${parsed.duration}`);
-                }
-                else {
-                    console.error('Cannot change duration of all-day event');
-                    process.exit(1);
-                }
-            }
-            if (parsed.noReminders) {
-                body.reminders = { useDefault: false, overrides: [] };
-                changes.push('reminders → none');
-            }
-            else if (parsed.reminders.length > 0) {
-                body.reminders = { useDefault: false, overrides: parsed.reminders };
-                const rlist = parsed.reminders.map(r => {
-                    const mins = r.minutes;
-                    const label = mins >= 1440 ? `${mins / 1440}d` : mins >= 60 ? `${mins / 60}h` : `${mins}m`;
-                    return `${label}${r.method === 'email' ? ':email' : ''}`;
-                }).join(', ');
-                changes.push(`reminders → ${rlist}`);
-            }
-            if (changes.length === 0) {
-                console.error('No update flags provided. Use -title, -loc, -start, -dur, or -r');
-                process.exit(1);
-            }
-            const updated = await updateEvent(token, target.id, body, parsed.calendar);
-            console.log(`\nUpdated: ${cleanUrls(updated.summary || '')}`);
-            for (const c of changes) {
-                console.log(`  ${c}`);
-            }
-            break;
-        }
-        case 'assoc': {
-            setupFileAssociation();
-            break;
-        }
         default:
             console.error(`Unknown command: ${parsed.command}`);
             showUsage();
@@ -783,11 +491,9 @@ async function main() {
     }
 }
 if (import.meta.main) {
-    main().then(() => {
-        process.exitCode = 0;
-    }).catch(e => {
+    main().catch(e => {
         console.error(`Error: ${e.message}`);
-        process.exitCode = 1;
+        process.exit(1);
     });
 }
 //# sourceMappingURL=gcal.js.map

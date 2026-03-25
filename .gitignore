@@ -1,17 +1,15 @@
-*.d.ts
-*.js
-*.js.map
-*.d.ts.map
-
-# Un-ignore compiled output for installability
-!gcal.js
-!gcal.js.map
 !gcal.d.ts
 !gcal.d.ts.map
-!glib/*.js
-!glib/*.js.map
+!gcal.js
+!gcal.js.map
 !glib/*.d.ts
 !glib/*.d.ts.map
+!glib/*.js
+!glib/*.js.map
+*.d.ts
+*.d.ts.map
+*.js
+*.js.map
 *.key
 *.log
 *.p12
@@ -28,6 +26,7 @@
 *~
 .DS_Store
 .cache/
+.claude/
 .env
 .env*
 .env.*.local

@@ -20,7 +20,7 @@ export declare function getAppDir(): string;
 export declare function getDataDir(): string;
 export declare const DATA_DIR: string;
 export declare const CONFIG_FILE: string;
-/** Use credentials from gcards (shared OAuth app) */
+/** OAuth credentials shipped with the package */
 export declare const CREDENTIALS_FILE: string;
 export declare function loadConfig(): GcalConfig;
 export declare function saveConfig(config: GcalConfig): void;
