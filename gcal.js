@@ -11,6 +11,8 @@ import fs from 'fs';
 import path from 'path';
 import { authenticateOAuth } from '@bobfrankston/oauthsupport';
 import { CREDENTIALS_FILE, loadConfig, saveConfig, getUserPaths, ensureUserDir, formatDateTime, formatDuration, parseDuration, parseDateTime, ts, normalizeUser } from './glib/gutils.js';
+import pkg from './package.json' with { type: 'json' };
+const VERSION = pkg.version;
 const CALENDAR_API_BASE = 'https://www.googleapis.com/calendar/v3';
 const CALENDAR_SCOPE_READ = 'https://www.googleapis.com/auth/calendar.readonly';
 const CALENDAR_SCOPE_WRITE = 'https://www.googleapis.com/auth/calendar';
@@ -180,7 +182,7 @@ async function importIcsFile(filePath, accessToken, calendarId = 'primary') {
 }
 function showUsage() {
     console.log(`
-gcal - Google Calendar CLI
+gcal v${VERSION} - Google Calendar CLI
 
 Usage:
   gcal <file.ics>                    Import ICS file (file association)
@@ -267,6 +269,11 @@ function parseArgs(argv) {
             case 'help':
                 result.help = true;
                 break;
+            case '-V':
+            case '-version':
+            case '--version':
+                console.log(`gcal v${VERSION}`);
+                process.exit(0);
             default:
                 if (arg.startsWith('-')) {
                     unknown.push(arg);
