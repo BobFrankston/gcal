@@ -52,7 +52,7 @@
     "@types/node": "^25.3.0"
   },
   "dependencies": {
-    "@bobfrankston/oauthsupport": "^1.0.9",
+    "@bobfrankston/oauthsupport": "^1.0.10",
     "ical.js": "^2.1.0"
   },
   "publishConfig": {
