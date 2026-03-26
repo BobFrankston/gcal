@@ -197,8 +197,7 @@ Commands:
   help                               Show this help
 
 Options:
-  -u, -user <email>        Google account (one-time)
-  -defaultUser <email>     Set default user for future use
+  -u, -user <email>        Set default Google account
   -c, -calendar <id>       Calendar ID (default: primary)
   -n <count>               Number of events to list
   -v, -verbose             Show event IDs and links
@@ -211,7 +210,7 @@ Examples:
   gcal add "Lunch" "1/14/2026 12:00" "1h"
   gcal add "Meeting" "tomorrow 10:00"
   gcal add "Appointment" "jan 15 2pm"
-  gcal -defaultUser bob@gmail.com         Set default user
+  gcal -u bob@gmail.com                   Set default user
 
 File Association (Windows):
   assoc .ics=icsfile
@@ -223,7 +222,6 @@ function parseArgs(argv) {
         command: '',
         args: [],
         user: '',
-        defaultUser: '',
         calendar: 'primary',
         count: 10,
         help: false,
@@ -240,10 +238,6 @@ function parseArgs(argv) {
             case '-user':
             case '--user':
                 result.user = argv[++i] || '';
-                break;
-            case '-defaultUser':
-            case '--defaultUser':
-                result.defaultUser = argv[++i] || '';
                 break;
             case '-c':
             case '-calendar':
@@ -300,15 +294,9 @@ function parseArgs(argv) {
     }
     return result;
 }
-function resolveUser(cliUser, setAsDefault = false) {
+function resolveUser(cliUser) {
     if (cliUser) {
-        const normalized = normalizeUser(cliUser);
-        if (setAsDefault) {
-            const config = loadConfig();
-            config.lastUser = normalized;
-            saveConfig(config);
-        }
-        return normalized;
+        return normalizeUser(cliUser);
     }
     const config = loadConfig();
     if (config.lastUser) {
@@ -319,9 +307,9 @@ function resolveUser(cliUser, setAsDefault = false) {
 async function main() {
     setupAbortHandler();
     const parsed = parseArgs(process.argv.slice(2));
-    // Handle -defaultUser first (can be combined with other commands)
-    if (parsed.defaultUser) {
-        const normalized = normalizeUser(parsed.defaultUser);
+    // Handle -u: save as default user
+    if (parsed.user) {
+        const normalized = normalizeUser(parsed.user);
         const config = loadConfig();
         config.lastUser = normalized;
         saveConfig(config);
@@ -340,10 +328,9 @@ async function main() {
         process.exit(1);
     }
     // Resolve user
-    const user = resolveUser(parsed.user, false);
+    const user = resolveUser(parsed.user);
     if (!user) {
-        console.error('No user configured.');
-        console.error('Use -u <email> for one-time, or -defaultUser <email> to set default.');
+        console.error('No user configured. Use -u <email> to set default user.');
         process.exit(1);
     }
     console.log(`${ts()} User: ${user}`);
