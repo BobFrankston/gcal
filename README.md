@@ -18,8 +18,7 @@ gcal [command] [options]
 
 | Flag | Description |
 |------|-------------|
-| `-u`, `-user <email>` | Google account (one-time) |
-| `-defaultUser <email>` | Set default user |
+| `-u`, `-user <email>` | Set default Google account |
 | `-c`, `-calendar <id>` | Calendar ID (default: primary) |
 | `-n <count>` | Number of events to list |
 | `-v`, `-verbose` | Show event IDs and links |
