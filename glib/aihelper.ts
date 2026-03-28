@@ -6,7 +6,7 @@
 
 import fs from 'fs';
 import path from 'path';
-import { execSync } from 'child_process';
+import clipboardy from 'clipboardy';
 
 // Load keys from shared gcards location
 function loadKeysEnv(): void {
@@ -123,15 +123,10 @@ export async function extractEventFromText(text: string): Promise<ExtractedEvent
     }
 }
 
+/** Read clipboard text (cross-platform via clipboardy) */
 export function readClipboard(): string {
     try {
-        if (process.platform === 'win32') {
-            return execSync('powershell -command Get-Clipboard', { encoding: 'utf-8' }).trim();
-        } else if (process.platform === 'darwin') {
-            return execSync('pbpaste', { encoding: 'utf-8' }).trim();
-        } else {
-            return execSync('xclip -selection clipboard -o', { encoding: 'utf-8' }).trim();
-        }
+        return clipboardy.readSync().trim();
     } catch {
         throw new Error('Failed to read clipboard');
     }

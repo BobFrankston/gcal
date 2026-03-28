@@ -23,7 +23,9 @@
       "Read(//y/dev/utils/cardx/gcal/$APPDATA/gcal/**)",
       "Bash(npm root:*)",
       "Bash(git:*)",
-      "Bash(npm pack:*)"
+      "Bash(npm pack:*)",
+      "Bash(npm info:*)",
+      "Bash(npm install:*)"
     ]
   }
 }
