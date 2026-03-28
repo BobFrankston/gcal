@@ -254,6 +254,7 @@ Options:
   -v, -verbose             Show event IDs and links
   -b, -birthdays           Include birthday events (hidden by default)
   -clip                    Read from clipboard (for add command)
+  -all                     Delete all instances of recurring event
 
 Examples:
   gcal meeting.ics                        Import ICS file
@@ -284,6 +285,7 @@ interface ParsedArgs {
     icsFile: string;  /** Direct .ics file path */
     birthdays: boolean;
     clip: boolean;
+    all: boolean;
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -297,7 +299,8 @@ function parseArgs(argv: string[]): ParsedArgs {
         verbose: false,
         icsFile: '',
         birthdays: false,
-        clip: false
+        clip: false,
+        all: false
     };
 
     const unknown: string[] = [];
@@ -331,6 +334,10 @@ function parseArgs(argv: string[]): ParsedArgs {
             case '-clip':
             case '--clip':
                 result.clip = true;
+                break;
+            case '-all':
+            case '--all':
+                result.all = true;
                 break;
             case '-h':
             case '-help':
@@ -619,27 +626,31 @@ async function main(): Promise<void> {
             const events = await listEvents(token, parsed.calendar, 50);
 
             for (const idPrefix of parsed.args) {
-                const matches = events.filter(e => e.id?.startsWith(idPrefix));
+                let matches = events.filter(e => e.id?.startsWith(idPrefix));
+                // Filter out birthdays unless -birthdays flag
+                if (!parsed.birthdays) {
+                    matches = matches.filter(e => e.eventType !== 'birthday');
+                }
+                // Deduplicate recurring event instances (same base ID before '_')
+                const unique = [...new Map(matches.map(e => [(e.id || '').split('_')[0], e])).values()];
 
-                if (matches.length === 0) {
+                if (unique.length === 0) {
                     console.error(`${idPrefix}: not found`);
                     continue;
                 }
-                if (matches.length > 1) {
-                    console.error(`${idPrefix}: ambiguous (${matches.length} matches)`);
-                    for (const e of matches) {
+                if (unique.length > 1) {
+                    console.error(`${idPrefix}: ambiguous (${unique.length} matches)`);
+                    for (const e of unique) {
                         console.error(`  ${e.id?.slice(0, 8)} - ${e.summary}`);
                     }
+                    console.error(`Use -all to delete entire recurring series`);
                     continue;
                 }
-
-                const event = matches[0];
-                if (event.eventType === 'birthday' && !parsed.birthdays) {
-                    console.log(`Skipped birthday: ${event.summary} (use -birthdays to include)`);
-                    continue;
-                }
-                await deleteEvent(token, event.id!, parsed.calendar);
-                console.log(`Deleted: ${event.summary}`);
+                const event = unique[0];
+                // -all: delete entire recurring series using base ID
+                const deleteId = parsed.all ? (event.id || '').split('_')[0] : event.id!;
+                await deleteEvent(token, deleteId, parsed.calendar);
+                console.log(`Deleted${parsed.all ? ' (all instances)' : ''}: ${event.summary}`);
             }
             break;
         }
