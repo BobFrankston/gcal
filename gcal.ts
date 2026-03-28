@@ -10,12 +10,14 @@
 
 import fs from 'fs';
 import path from 'path';
+import { createInterface } from 'readline/promises';
 import { authenticateOAuth } from '@bobfrankston/oauthsupport';
 import type { GoogleEvent, EventsListResponse, CalendarListEntry, CalendarListResponse } from './glib/types.ts';
 import {
     CREDENTIALS_FILE, loadConfig, saveConfig, getUserPaths,
     ensureUserDir, formatDateTime, formatDuration, parseDuration, parseDateTime, ts, normalizeUser
 } from './glib/gutils.js';
+import { extractEventFromText, readClipboard } from './glib/aihelper.js';
 
 import pkg from './package.json' with { type: 'json' };
 const VERSION: string = pkg.version;
@@ -236,7 +238,10 @@ Usage:
 
 Commands:
   list [n]                           List upcoming n events (default: 10)
-  add <title> <when> [duration]      Add event
+  add <title> <when> [duration]      Add event (explicit args)
+  add                                Add event (type description interactively)
+  add "free text description"        Add event (AI parses single text arg)
+  add -clip                          Add event from clipboard text (AI-parsed)
   del|delete <id> [id2...]           Delete event(s) by ID (prefix match)
   import <file.ics>                  Import events from ICS file
   calendars                          List available calendars
@@ -247,7 +252,8 @@ Options:
   -c, -calendar <id>       Calendar ID (default: primary)
   -n <count>               Number of events to list
   -v, -verbose             Show event IDs and links
-  -b, -birthdays            Include birthday events (hidden by default)
+  -b, -birthdays           Include birthday events (hidden by default)
+  -clip                    Read from clipboard (for add command)
 
 Examples:
   gcal meeting.ics                        Import ICS file
@@ -256,6 +262,9 @@ Examples:
   gcal add "Lunch" "1/14/2026 12:00" "1h"
   gcal add "Meeting" "tomorrow 10:00"
   gcal add "Appointment" "jan 15 2pm"
+  gcal add "Dentist appointment Friday 3pm for 1 hour"
+  gcal add -clip                          Add from clipboard text
+  gcal add                                Type event description
   gcal -u bob@gmail.com                   Set default user
 
 File Association (Windows):
@@ -274,6 +283,7 @@ interface ParsedArgs {
     verbose: boolean;
     icsFile: string;  /** Direct .ics file path */
     birthdays: boolean;
+    clip: boolean;
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -286,7 +296,8 @@ function parseArgs(argv: string[]): ParsedArgs {
         help: false,
         verbose: false,
         icsFile: '',
-        birthdays: false
+        birthdays: false,
+        clip: false
     };
 
     const unknown: string[] = [];
@@ -316,6 +327,10 @@ function parseArgs(argv: string[]): ParsedArgs {
             case '-birthdays':
             case '--birthdays':
                 result.birthdays = true;
+                break;
+            case '-clip':
+            case '--clip':
+                result.clip = true;
                 break;
             case '-h':
             case '-help':
@@ -487,28 +502,93 @@ async function main(): Promise<void> {
         }
 
         case 'add': {
-            if (parsed.args.length < 2) {
-                console.error('Usage: gcal add <title> <when> [duration]');
-                console.error('Example: gcal add "Meeting" "tomorrow 2pm" "1h"');
+            // Explicit mode: gcal add "title" "when" [duration]
+            if (parsed.args.length >= 2 && !parsed.clip) {
+                const [title, when, duration = '1h'] = parsed.args;
+                const startTime = parseDateTime(when);
+                const durationMins = parseDuration(duration);
+                const endTime = new Date(startTime.getTime() + durationMins * 60 * 1000);
+
+                const event: GoogleEvent = {
+                    summary: title,
+                    start: {
+                        dateTime: startTime.toISOString(),
+                        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
+                    },
+                    end: {
+                        dateTime: endTime.toISOString(),
+                        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
+                    }
+                };
+
+                const token = await getAccessToken(user, true);
+                const created = await createEvent(token, event, parsed.calendar);
+                console.log(`\nEvent created: ${created.summary}`);
+                console.log(`  When: ${formatDateTime(created.start)} - ${formatDateTime(created.end)}`);
+                if (created.htmlLink) {
+                    console.log(`  Link: ${created.htmlLink}`);
+                }
+                break;
+            }
+
+            // AI mode: freeform text from clipboard, keyboard, or single arg
+            let inputText: string;
+            if (parsed.clip) {
+                console.log('Reading from clipboard...');
+                inputText = readClipboard();
+                if (!inputText) {
+                    console.error('Clipboard is empty');
+                    process.exit(1);
+                }
+                console.log(`Clipboard: ${inputText.substring(0, 200)}${inputText.length > 200 ? '...' : ''}`);
+            } else if (parsed.args.length === 1) {
+                inputText = parsed.args[0];
+            } else {
+                const rl = createInterface({ input: process.stdin, output: process.stdout });
+                inputText = (await rl.question('Describe the event: ')).trim();
+                rl.close();
+                if (!inputText) {
+                    console.error('No input provided');
+                    process.exit(1);
+                }
+            }
+
+            console.log('Extracting event details...');
+            const extracted = await extractEventFromText(inputText);
+            if (!extracted) {
+                console.error('Failed to extract event details from text');
                 process.exit(1);
             }
 
-            const [title, when, duration = '1h'] = parsed.args;
-            const startTime = parseDateTime(when);
-            const durationMins = parseDuration(duration);
+            const startTime = new Date(extracted.startDateTime);
+            if (isNaN(startTime.getTime())) {
+                console.error(`AI returned invalid date: ${extracted.startDateTime}`);
+                process.exit(1);
+            }
+            const durationMins = parseDuration(extracted.duration || '1h');
             const endTime = new Date(startTime.getTime() + durationMins * 60 * 1000);
+            const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
             const event: GoogleEvent = {
-                summary: title,
-                start: {
-                    dateTime: startTime.toISOString(),
-                    timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
-                },
-                end: {
-                    dateTime: endTime.toISOString(),
-                    timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
-                }
+                summary: extracted.summary,
+                start: { dateTime: startTime.toISOString(), timeZone: tz },
+                end: { dateTime: endTime.toISOString(), timeZone: tz },
+                location: extracted.location,
+                description: extracted.description
             };
+
+            console.log(`\n  Event: ${extracted.summary}`);
+            console.log(`  When:  ${formatDateTime(event.start)} - ${formatDateTime(event.end)} (${extracted.duration || '1h'})`);
+            if (extracted.location) console.log(`  Where: ${extracted.location}`);
+            if (extracted.description) console.log(`  Note:  ${extracted.description}`);
+
+            const rl2 = createInterface({ input: process.stdin, output: process.stdout });
+            const confirm = (await rl2.question('\nCreate this event? [Y/n] ')).trim().toLowerCase();
+            rl2.close();
+            if (confirm && confirm !== 'y' && confirm !== 'yes') {
+                console.log('Cancelled.');
+                break;
+            }
 
             const token = await getAccessToken(user, true);
             const created = await createEvent(token, event, parsed.calendar);
