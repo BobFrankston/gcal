@@ -542,7 +542,11 @@ async function main(): Promise<void> {
                 }
                 console.log(`Clipboard: ${inputText.substring(0, 200)}${inputText.length > 200 ? '...' : ''}`);
             } else if (parsed.args.length === 1) {
-                inputText = parsed.args[0];
+                inputText = parsed.args[0].trim();
+                if (!inputText) {
+                    console.error('Event description is empty');
+                    process.exit(1);
+                }
             } else {
                 const rl = createInterface({ input: process.stdin, output: process.stdout });
                 inputText = (await rl.question('Describe the event: ')).trim();
