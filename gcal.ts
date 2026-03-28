@@ -564,25 +564,28 @@ async function main(): Promise<void> {
                 process.exit(1);
             }
 
-            const startTime = new Date(extracted.startDateTime);
-            if (isNaN(startTime.getTime())) {
-                console.error(`AI returned invalid date: ${extracted.startDateTime}`);
+            const tz = extracted.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone;
+            const startDt = extracted.startDateTime; // e.g. "2026-03-29T17:00:00"
+            if (isNaN(new Date(startDt).getTime())) {
+                console.error(`AI returned invalid date: ${startDt}`);
                 process.exit(1);
             }
             const durationMins = parseDuration(extracted.duration || '1h');
-            const endTime = new Date(startTime.getTime() + durationMins * 60 * 1000);
-            const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+            const endMs = new Date(startDt).getTime() + durationMins * 60 * 1000;
+            const endDate = new Date(endMs);
+            const endDt = `${endDate.getFullYear()}-${String(endDate.getMonth() + 1).padStart(2, '0')}-${String(endDate.getDate()).padStart(2, '0')}T${String(endDate.getHours()).padStart(2, '0')}:${String(endDate.getMinutes()).padStart(2, '0')}:00`;
 
             const event: GoogleEvent = {
                 summary: extracted.summary,
-                start: { dateTime: startTime.toISOString(), timeZone: tz },
-                end: { dateTime: endTime.toISOString(), timeZone: tz },
+                start: { dateTime: startDt, timeZone: tz },
+                end: { dateTime: endDt, timeZone: tz },
                 location: extracted.location,
                 description: extracted.description
             };
 
+            const localTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
             console.log(`\n  Event: ${extracted.summary}`);
-            console.log(`  When:  ${formatDateTime(event.start)} - ${formatDateTime(event.end)} (${extracted.duration || '1h'})`);
+            console.log(`  When:  ${formatDateTime(event.start)} - ${formatDateTime(event.end)} (${extracted.duration || '1h'})${tz !== localTz ? ` [${tz}]` : ''}`);
             if (extracted.location) console.log(`  Where: ${extracted.location}`);
             if (extracted.description) console.log(`  Note:  ${extracted.description}`);
 

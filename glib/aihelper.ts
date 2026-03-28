@@ -40,19 +40,21 @@ export interface ExtractedEvent {
     summary: string;
     startDateTime: string;
     duration: string;
+    timeZone?: string;
     location?: string;
     description?: string;
 }
 
 const EVENT_EXTRACTION_PROMPT = `Extract calendar event details from the user's text and return ONLY valid JSON.
 
-Today's date is {{TODAY}}.
+Today's date is {{TODAY}}. The user's local timezone is {{TIMEZONE}}.
 
 Output format:
 {
   "summary": "Event title",
   "startDateTime": "YYYY-MM-DDTHH:mm:ss",
   "duration": "1h",
+  "timeZone": "IANA timezone",
   "location": "optional location",
   "description": "optional description"
 }
@@ -61,6 +63,7 @@ Rules:
 - summary: concise event title
 - startDateTime: ISO format, resolve relative dates (tomorrow, next Friday, etc.) using today's date
 - duration: format as "Xh", "Xm", or "XhYm" (default "1h" if not specified)
+- timeZone: IANA timezone (e.g. "America/New_York"). Infer from location if the event is in a different timezone than the user. Default to the user's local timezone if unclear.
 - location: include if mentioned, omit if not
 - description: include extra details if any, omit if none
 - Return ONLY the JSON object, no markdown, no explanation`;
@@ -79,7 +82,10 @@ export async function extractEventFromText(text: string): Promise<ExtractedEvent
 
     const today = new Date().toISOString().split('T')[0];
     const dayName = new Date().toLocaleDateString('en-US', { weekday: 'long' });
-    const systemPrompt = EVENT_EXTRACTION_PROMPT.replace('{{TODAY}}', `${today} (${dayName})`);
+    const localTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const systemPrompt = EVENT_EXTRACTION_PROMPT
+        .replace('{{TODAY}}', `${today} (${dayName})`)
+        .replace('{{TIMEZONE}}', localTz);
 
     try {
         const response = await fetch('https://api.anthropic.com/v1/messages', {
