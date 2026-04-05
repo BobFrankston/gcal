@@ -49,15 +49,19 @@ const EVENT_EXTRACTION_PROMPT = `Extract calendar event details from the user's 
 
 Today's date is {{TODAY}}. The user's local timezone is {{TIMEZONE}}.
 
+The text may describe one or multiple events. Always return a JSON array of event objects.
+
 Output format:
-{
-  "summary": "Event title",
-  "startDateTime": "YYYY-MM-DDTHH:mm:ss",
-  "duration": "1h",
-  "timeZone": "IANA timezone",
-  "location": "optional location",
-  "description": "optional description"
-}
+[
+  {
+    "summary": "Event title",
+    "startDateTime": "YYYY-MM-DDTHH:mm:ss",
+    "duration": "1h",
+    "timeZone": "IANA timezone",
+    "location": "optional location",
+    "description": "optional description"
+  }
+]
 
 Rules:
 - summary: concise event title
@@ -66,9 +70,9 @@ Rules:
 - timeZone: IANA timezone (e.g. "America/New_York"). Infer from location if the event is in a different timezone than the user. Default to the user's local timezone if unclear.
 - location: include if mentioned, omit if not
 - description: include extra details if any, omit if none
-- Return ONLY the JSON object, no markdown, no explanation`;
+- Return ONLY the JSON array, no markdown, no explanation`;
 
-export async function extractEventFromText(text: string): Promise<ExtractedEvent | null> {
+export async function extractEventsFromText(text: string): Promise<ExtractedEvent[]> {
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) {
         const home = process.env.HOME || process.env.USERPROFILE || '';
@@ -77,7 +81,7 @@ export async function extractEventFromText(text: string): Promise<ExtractedEvent
         console.error(`\nANTHROPIC_API_KEY not set.`);
         console.error(`Add it to: ${keysPath}`);
         console.error(`Format: ANTHROPIC_API_KEY=sk-ant-...\n`);
-        return null;
+        return [];
     }
 
     const today = new Date().toISOString().split('T')[0];
@@ -114,18 +118,27 @@ export async function extractEventFromText(text: string): Promise<ExtractedEvent
 
         const data = await response.json() as any;
         const content = data.content?.[0]?.text;
-        if (!content) return null;
+        if (!content) return [];
 
-        const jsonMatch = content.match(/\{[\s\S]*\}/);
+        const jsonMatch = content.match(/\[[\s\S]*\]/);
         if (!jsonMatch) {
-            console.error('No JSON found in AI response');
-            return null;
+            // Fall back to single object for backward compat
+            const objMatch = content.match(/\{[\s\S]*\}/);
+            if (!objMatch) {
+                console.error('No JSON found in AI response');
+                return [];
+            }
+            return [JSON.parse(objMatch[0]) as ExtractedEvent];
         }
 
-        return JSON.parse(jsonMatch[0]) as ExtractedEvent;
+        const parsed = JSON.parse(jsonMatch[0]);
+        if (Array.isArray(parsed)) {
+            return parsed as ExtractedEvent[];
+        }
+        return [parsed as ExtractedEvent];
     } catch (error) {
         console.error(`Error extracting event: ${error}`);
-        return null;
+        return [];
     }
 }
 

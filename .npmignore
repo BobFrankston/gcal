@@ -26,3 +26,5 @@ token*
 tsconfig.json
 .globalize.json5
 .claude/
+node_modules/
+*.tgz

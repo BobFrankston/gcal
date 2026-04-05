@@ -12,7 +12,7 @@ import path from 'path';
 import { createInterface } from 'readline/promises';
 import { authenticateOAuth } from '@bobfrankston/oauthsupport';
 import { CREDENTIALS_FILE, loadConfig, saveConfig, getUserPaths, ensureUserDir, formatDateTime, formatDuration, parseDuration, parseDateTime, ts, normalizeUser } from './glib/gutils.js';
-import { extractEventFromText, readClipboard } from './glib/aihelper.js';
+import { extractEventsFromText, readClipboard } from './glib/aihelper.js';
 import pkg from './package.json' with { type: 'json' };
 const VERSION = pkg.version;
 const CALENDAR_API_BASE = 'https://www.googleapis.com/calendar/v3';
@@ -219,7 +219,7 @@ Examples:
   gcal add "Appointment" "jan 15 2pm"
   gcal add "Dentist appointment Friday 3pm for 1 hour"
   gcal add -clip                          Add from clipboard text
-  gcal add                                Type event description
+  gcal add                                Type event description (one or multiple)
   gcal -u bob@gmail.com                   Set default user
 
 File Association (Windows):
@@ -479,48 +479,61 @@ async function main() {
                 }
             }
             console.log('Extracting event details...');
-            const extracted = await extractEventFromText(inputText);
-            if (!extracted) {
+            const extractedEvents = await extractEventsFromText(inputText);
+            if (extractedEvents.length === 0) {
                 console.error('Failed to extract event details from text');
                 process.exit(1);
             }
-            const tz = extracted.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone;
-            const startDt = extracted.startDateTime; // e.g. "2026-03-29T17:00:00"
-            if (isNaN(new Date(startDt).getTime())) {
-                console.error(`AI returned invalid date: ${startDt}`);
+            const localTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+            const events = [];
+            for (const extracted of extractedEvents) {
+                const tz = extracted.timeZone || localTz;
+                const startDt = extracted.startDateTime;
+                if (isNaN(new Date(startDt).getTime())) {
+                    console.error(`AI returned invalid date: ${startDt} — skipping`);
+                    continue;
+                }
+                const durationMins = parseDuration(extracted.duration || '1h');
+                const endMs = new Date(startDt).getTime() + durationMins * 60 * 1000;
+                const endDate = new Date(endMs);
+                const endDt = `${endDate.getFullYear()}-${String(endDate.getMonth() + 1).padStart(2, '0')}-${String(endDate.getDate()).padStart(2, '0')}T${String(endDate.getHours()).padStart(2, '0')}:${String(endDate.getMinutes()).padStart(2, '0')}:00`;
+                const event = {
+                    summary: extracted.summary,
+                    start: { dateTime: startDt, timeZone: tz },
+                    end: { dateTime: endDt, timeZone: tz },
+                    location: extracted.location,
+                    description: extracted.description
+                };
+                events.push(event);
+                console.log(`\n  Event: ${extracted.summary}`);
+                console.log(`  When:  ${formatDateTime(event.start)} - ${formatDateTime(event.end)} (${extracted.duration || '1h'})${tz !== localTz ? ` [${tz}]` : ''}`);
+                if (extracted.location)
+                    console.log(`  Where: ${extracted.location}`);
+                if (extracted.description)
+                    console.log(`  Note:  ${extracted.description}`);
+            }
+            if (events.length === 0) {
+                console.error('No valid events extracted');
                 process.exit(1);
             }
-            const durationMins = parseDuration(extracted.duration || '1h');
-            const endMs = new Date(startDt).getTime() + durationMins * 60 * 1000;
-            const endDate = new Date(endMs);
-            const endDt = `${endDate.getFullYear()}-${String(endDate.getMonth() + 1).padStart(2, '0')}-${String(endDate.getDate()).padStart(2, '0')}T${String(endDate.getHours()).padStart(2, '0')}:${String(endDate.getMinutes()).padStart(2, '0')}:00`;
-            const event = {
-                summary: extracted.summary,
-                start: { dateTime: startDt, timeZone: tz },
-                end: { dateTime: endDt, timeZone: tz },
-                location: extracted.location,
-                description: extracted.description
-            };
-            const localTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-            console.log(`\n  Event: ${extracted.summary}`);
-            console.log(`  When:  ${formatDateTime(event.start)} - ${formatDateTime(event.end)} (${extracted.duration || '1h'})${tz !== localTz ? ` [${tz}]` : ''}`);
-            if (extracted.location)
-                console.log(`  Where: ${extracted.location}`);
-            if (extracted.description)
-                console.log(`  Note:  ${extracted.description}`);
+            const prompt = events.length === 1
+                ? '\nCreate this event? [Y/n] '
+                : `\nCreate ${events.length} events? [Y/n] `;
             const rl2 = createInterface({ input: process.stdin, output: process.stdout });
-            const confirm = (await rl2.question('\nCreate this event? [Y/n] ')).trim().toLowerCase();
+            const confirm = (await rl2.question(prompt)).trim().toLowerCase();
             rl2.close();
             if (confirm && confirm !== 'y' && confirm !== 'yes') {
                 console.log('Cancelled.');
                 break;
             }
             const token = await getAccessToken(user, true);
-            const created = await createEvent(token, event, parsed.calendar);
-            console.log(`\nEvent created: ${created.summary}`);
-            console.log(`  When: ${formatDateTime(created.start)} - ${formatDateTime(created.end)}`);
-            if (created.htmlLink) {
-                console.log(`  Link: ${created.htmlLink}`);
+            for (const event of events) {
+                const created = await createEvent(token, event, parsed.calendar);
+                console.log(`\nEvent created: ${created.summary}`);
+                console.log(`  When: ${formatDateTime(created.start)} - ${formatDateTime(created.end)}`);
+                if (created.htmlLink) {
+                    console.log(`  Link: ${created.htmlLink}`);
+                }
             }
             break;
         }
