@@ -20,6 +20,7 @@
 *.swo
 *.swp
 *.temp
+*.tgz
 *.tmp
 *.token
 *cert*/

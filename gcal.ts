@@ -254,6 +254,7 @@ Options:
   -v, -verbose             Show event IDs and links
   -b, -birthdays           Include birthday events (hidden by default)
   -clip                    Read from clipboard (for add command)
+  -r, -reminder <dur>      Add popup reminder (e.g., 30m, 1h); repeatable
   -all                     Delete all instances of recurring event
 
 Examples:
@@ -265,6 +266,7 @@ Examples:
   gcal add "Appointment" "jan 15 2pm"
   gcal add "Dentist appointment Friday 3pm for 1 hour"
   gcal add -clip                          Add from clipboard text
+  gcal add "Dentist" "Friday 3pm" -r 30m  Add with 30-min reminder
   gcal add                                Type event description (one or multiple)
   gcal -u bob@gmail.com                   Set default user
 
@@ -286,6 +288,7 @@ interface ParsedArgs {
     birthdays: boolean;
     clip: boolean;
     all: boolean;
+    reminders: number[];
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -300,7 +303,8 @@ function parseArgs(argv: string[]): ParsedArgs {
         icsFile: '',
         birthdays: false,
         clip: false,
-        all: false
+        all: false,
+        reminders: []
     };
 
     const unknown: string[] = [];
@@ -339,6 +343,14 @@ function parseArgs(argv: string[]): ParsedArgs {
             case '--all':
                 result.all = true;
                 break;
+            case '-r':
+            case '-reminder':
+            case '--reminder': {
+                const val = argv[++i] || '';
+                const mins = parseDuration(val);
+                result.reminders.push(mins);
+                break;
+            }
             case '-h':
             case '-help':
             case '--help':
@@ -374,6 +386,14 @@ function parseArgs(argv: string[]): ParsedArgs {
     }
 
     return result;
+}
+
+function buildReminders(minutes: number[]): GoogleEvent['reminders'] | undefined {
+    if (minutes.length === 0) return undefined;
+    return {
+        useDefault: false,
+        overrides: minutes.map(m => ({ method: 'popup' as const, minutes: m }))
+    };
 }
 
 function resolveUser(cliUser: string): string {
@@ -525,7 +545,8 @@ async function main(): Promise<void> {
                     end: {
                         dateTime: endTime.toISOString(),
                         timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
-                    }
+                    },
+                    reminders: buildReminders(parsed.reminders)
                 };
 
                 const token = await getAccessToken(user, true);
@@ -590,7 +611,8 @@ async function main(): Promise<void> {
                     start: { dateTime: startDt, timeZone: tz },
                     end: { dateTime: endDt, timeZone: tz },
                     location: extracted.location,
-                    description: extracted.description
+                    description: extracted.description,
+                    reminders: buildReminders(parsed.reminders)
                 };
                 events.push(event);
 
@@ -606,10 +628,16 @@ async function main(): Promise<void> {
             }
 
             const prompt = events.length === 1
-                ? '\nCreate this event? [Y/n] '
-                : `\nCreate ${events.length} events? [Y/n] `;
+                ? '\nCreate this event? [Y/n] (auto-yes in 60s) '
+                : `\nCreate ${events.length} events? [Y/n] (auto-yes in 60s) `;
             const rl2 = createInterface({ input: process.stdin, output: process.stdout });
-            const confirm = (await rl2.question(prompt)).trim().toLowerCase();
+            const confirm = await Promise.race([
+                rl2.question(prompt).then(s => s.trim().toLowerCase()),
+                new Promise<string>(resolve => setTimeout(() => {
+                    console.log('\nNo response — creating event(s).');
+                    resolve('');
+                }, 60_000))
+            ]);
             rl2.close();
             if (confirm && confirm !== 'y' && confirm !== 'yes') {
                 console.log('Cancelled.');
