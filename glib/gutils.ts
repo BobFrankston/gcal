@@ -9,6 +9,7 @@ import os from 'os';
 export interface GcalConfig {
     lastUser?: string;
     defaultCalendar?: string;
+    assocChecked?: boolean;
 }
 
 export interface UserPaths {

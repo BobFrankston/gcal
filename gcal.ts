@@ -10,6 +10,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import { execSync } from 'child_process';
 import { createInterface } from 'readline/promises';
 import { authenticateOAuth } from '@bobfrankston/oauthsupport';
 import type { GoogleEvent, EventsListResponse, CalendarListEntry, CalendarListResponse } from './glib/types.ts';
@@ -148,6 +149,24 @@ async function deleteEvent(
     }
 }
 
+async function patchEvent(
+    accessToken: string,
+    eventId: string,
+    patch: Partial<GoogleEvent>,
+    calendarId = 'primary'
+): Promise<GoogleEvent> {
+    const url = `${CALENDAR_API_BASE}/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`;
+    const res = await apiFetch(url, accessToken, {
+        method: 'PATCH',
+        body: JSON.stringify(patch)
+    });
+    if (!res.ok) {
+        const errText = await res.text();
+        throw new Error(`Failed to update event: ${res.status} ${errText}`);
+    }
+    return await res.json() as GoogleEvent;
+}
+
 async function importIcsFile(
     filePath: string,
     accessToken: string,
@@ -243,8 +262,10 @@ Commands:
   add "free text description"        Add event (AI parses single text arg)
   add -clip                          Add event from clipboard text (AI-parsed)
   del|delete <id> [id2...]           Delete event(s) by ID (prefix match)
+  remind <id> <dur> [dur2...]        Add reminder(s) to existing event
   import <file.ics>                  Import events from ICS file
   calendars                          List available calendars
+  assoc                              Set up .ics file association (Windows)
   help                               Show this help
 
 Options:
@@ -267,12 +288,12 @@ Examples:
   gcal add "Dentist appointment Friday 3pm for 1 hour"
   gcal add -clip                          Add from clipboard text
   gcal add "Dentist" "Friday 3pm" -r 30m  Add with 30-min reminder
+  gcal remind abc12345 30m                Add 30-min reminder to event
   gcal add                                Type event description (one or multiple)
   gcal -u bob@gmail.com                   Set default user
 
 File Association (Windows):
-  assoc .ics=icsfile
-  ftype icsfile=gcal "%1"
+  gcal assoc                              Set up automatically
 `);
 }
 
@@ -396,6 +417,34 @@ function buildReminders(minutes: number[]): GoogleEvent['reminders'] | undefined
     };
 }
 
+function checkIcsAssoc(): boolean {
+    if (process.platform !== 'win32') return true;
+    try {
+        const result = execSync('cmd /c assoc .ics 2>nul', { encoding: 'utf-8' }).trim();
+        if (!result.includes('icsfile')) return false;
+        const ftype = execSync('cmd /c ftype icsfile 2>nul', { encoding: 'utf-8' }).trim();
+        return ftype.includes('gcal');
+    } catch {
+        return false;
+    }
+}
+
+function setIcsAssoc(): boolean {
+    if (process.platform !== 'win32') {
+        console.log('File associations are only supported on Windows.');
+        return false;
+    }
+    try {
+        // Use HKCU registry — no admin needed
+        execSync('reg add HKCU\\Software\\Classes\\.ics /ve /d icsfile /f', { stdio: 'pipe' });
+        execSync('reg add HKCU\\Software\\Classes\\icsfile\\shell\\open\\command /ve /d "gcal \\"%1\\"" /f', { stdio: 'pipe' });
+        return true;
+    } catch (e: any) {
+        console.error(`Failed to set file association: ${e.message}`);
+        return false;
+    }
+}
+
 function resolveUser(cliUser: string): string {
     if (cliUser) {
         return normalizeUser(cliUser);
@@ -430,12 +479,50 @@ async function main(): Promise<void> {
 
     if (parsed.help) {
         showUsage();
+        if (process.platform === 'win32' && !checkIcsAssoc()) {
+            console.log('Note: .ics file association not set. Run "gcal assoc" to set it up.');
+        }
         process.exit(0);
     }
 
     if (!parsed.command) {
+        // First run with no command: offer to set up .ics file association
+        if (process.platform === 'win32') {
+            const config = loadConfig();
+            if (!config.assocChecked) {
+                config.assocChecked = true;
+                saveConfig(config);
+                if (!checkIcsAssoc()) {
+                    const rl = createInterface({ input: process.stdin, output: process.stdout });
+                    const answer = await rl.question('Set up .ics file association so double-clicking imports to gcal? [Y/n] ');
+                    rl.close();
+                    if (!answer || answer.toLowerCase() === 'y' || answer.toLowerCase() === 'yes') {
+                        if (setIcsAssoc()) {
+                            console.log('.ics file association set.\n');
+                        }
+                    }
+                }
+            }
+        }
         showUsage();
+        if (process.platform === 'win32' && !checkIcsAssoc()) {
+            console.log('Note: .ics file association not set. Run "gcal assoc" to set it up.');
+        }
         process.exit(1);
+    }
+
+    // Commands that don't need authentication
+    if (parsed.command === 'assoc') {
+        if (process.platform !== 'win32') {
+            console.error('File associations are only supported on Windows.');
+            process.exit(1);
+        }
+        if (checkIcsAssoc()) {
+            console.log('.ics file association is already set.');
+        } else if (setIcsAssoc()) {
+            console.log('.ics file association set. Double-click .ics files to import with gcal.');
+        }
+        process.exit(0);
     }
 
     // Resolve user
@@ -707,6 +794,49 @@ async function main(): Promise<void> {
                 const role = cal.accessRole ? ` [${cal.accessRole}]` : '';
                 console.log(`  ${cal.summary || cal.id}${primary}${role}`);
                 console.log(`    ID: ${cal.id}`);
+            }
+            break;
+        }
+
+        case 'remind': {
+            if (parsed.args.length < 2) {
+                console.error('Usage: gcal remind <id> <duration> [duration2...]');
+                console.error('  e.g.: gcal remind abc12345 30m');
+                console.error('  e.g.: gcal remind abc12345 30m 1h');
+                console.error('Use "gcal list" to see event IDs');
+                process.exit(1);
+            }
+
+            const [idPrefix, ...durationArgs] = parsed.args;
+            const reminderMins = durationArgs.map(d => parseDuration(d));
+
+            const token = await getAccessToken(user, true);
+            const events = await listEvents(token, parsed.calendar, 50);
+
+            let matches = events.filter(e => e.id?.startsWith(idPrefix));
+            if (!parsed.birthdays) {
+                matches = matches.filter(e => e.eventType !== 'birthday');
+            }
+            const unique = [...new Map(matches.map(e => [(e.id || '').split('_')[0], e])).values()];
+
+            if (unique.length === 0) {
+                console.error(`${idPrefix}: not found`);
+                process.exit(1);
+            }
+            if (unique.length > 1) {
+                console.error(`${idPrefix}: ambiguous (${unique.length} matches)`);
+                for (const e of unique) {
+                    console.error(`  ${e.id?.slice(0, 8)} - ${e.summary}`);
+                }
+                process.exit(1);
+            }
+
+            const event = unique[0];
+            const reminders = buildReminders(reminderMins);
+            const updated = await patchEvent(token, event.id!, { reminders }, parsed.calendar);
+            console.log(`Updated: ${updated.summary}`);
+            for (const m of reminderMins) {
+                console.log(`  Reminder: ${m >= 60 ? `${m / 60}h` : `${m}m`} before`);
             }
             break;
         }

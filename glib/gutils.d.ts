@@ -4,6 +4,7 @@
 export interface GcalConfig {
     lastUser?: string;
     defaultCalendar?: string;
+    assocChecked?: boolean;
 }
 export interface UserPaths {
     userDir: string;
