@@ -1,6 +1,6 @@
 {
   "name": "@bobfrankston/gcal",
-  "version": "0.1.40",
+  "version": "0.1.41",
   "description": "Google Calendar CLI tool with ICS import support",
   "type": "module",
   "main": "gcal.js",
@@ -36,7 +36,8 @@
     "release:local": "npm run prerelease:local && npm version patch && npm publish --access public --ignore-scripts",
     "installer": "npm run release && npm install -g .",
     "old-release": "npm run prerelease:local && npm version patch && npm publish --access public",
-    "old-installer": "npm run release && npm install -g ."
+    "old-installer": "npm run release && npm install -g .",
+    "postversion": "git push && git push --tags"
   },
   "keywords": [
     "google",
