@@ -79,13 +79,15 @@ async function listCalendars(accessToken) {
     const data = await res.json();
     return data.items || [];
 }
-async function listEvents(accessToken, calendarId = 'primary', maxResults = 10, timeMin) {
+async function listEvents(accessToken, calendarId = 'primary', maxResults = 10, timeMin, timeMax) {
     const params = new URLSearchParams({
         maxResults: maxResults.toString(),
         singleEvents: 'true',
         orderBy: 'startTime',
         timeMin: timeMin || new Date().toISOString()
     });
+    if (timeMax)
+        params.set('timeMax', timeMax);
     const url = `${CALENDAR_API_BASE}/calendars/${encodeURIComponent(calendarId)}/events?${params}`;
     const res = await apiFetch(url, accessToken);
     if (!res.ok) {
@@ -206,6 +208,8 @@ Usage:
 Commands:
   list [n]                           List upcoming n events (default: 10)
   list -since <date>                 List events from <date> forward (past ok)
+  list -till <date>                  List events up to <date>
+  list -since <d1> -till <d2>        List events in a date range
   add <title> <when> [duration]      Add event (explicit args)
   add                                Add event (type description interactively)
   add "free text description"        Add event (AI parses single text arg)
@@ -228,12 +232,14 @@ Options:
   -clip                    Read from clipboard (for add command)
   -r, -reminder <dur>      Add popup reminder (e.g., 30m, 1h); repeatable
   -since <date>            Start listing from <date> (e.g. "10 days ago", "April 1")
+  -till <date>             End listing at <date>
   -all                     Delete all instances of recurring event
 
 Examples:
   gcal meeting.ics                        Import ICS file
   gcal list                               List next 10 events
   gcal list -since "10 days ago"          List events from 10 days ago forward
+  gcal list -since "april 1" -till "may 1" Events in April
   gcal list -since "april 1" -n 50        List 50 events since April 1
   gcal add "Dentist" "Friday 3pm" "1h"
   gcal add "Lunch" "1/14/2026 12:00" "1h"
@@ -321,6 +327,18 @@ function parseArgs(argv) {
                 }
                 catch {
                     console.error(`Invalid -since value: ${val}`);
+                    process.exit(1);
+                }
+                break;
+            }
+            case '-till':
+            case '--till': {
+                const val = argv[++i] || '';
+                try {
+                    result.till = parseDateTime(val);
+                }
+                catch {
+                    console.error(`Invalid -till value: ${val}`);
                     process.exit(1);
                 }
                 break;
@@ -477,7 +495,6 @@ async function main() {
         console.error('No user configured. Use -u <email> to set default user.');
         process.exit(1);
     }
-    console.log(`${ts()} User: ${user}`);
     switch (parsed.command) {
         case 'import': {
             const filePath = parsed.icsFile || parsed.args[0];
@@ -501,10 +518,19 @@ async function main() {
             break;
         }
         case 'list': {
-            const count = parsed.args[0] ? parseInt(parsed.args[0]) : parsed.count;
+            let count = parsed.count;
+            if (parsed.args.length > 0) {
+                if (parsed.args.length > 1 || !/^\d+$/.test(parsed.args[0])) {
+                    console.error(`Invalid list arguments: ${parsed.args.join(' ')}`);
+                    console.error('Usage: gcal list [n] [-since <date>] [-till <date>]');
+                    process.exit(1);
+                }
+                count = parseInt(parsed.args[0], 10);
+            }
             const token = await getAccessToken(user, false);
             const timeMin = parsed.since ? parsed.since.toISOString() : undefined;
-            let events = await listEvents(token, parsed.calendar, count, timeMin);
+            const timeMax = parsed.till ? parsed.till.toISOString() : undefined;
+            let events = await listEvents(token, parsed.calendar, count, timeMin, timeMax);
             const birthdayCount = events.filter(e => e.eventType === 'birthday').length;
             if (!parsed.birthdays) {
                 events = events.filter(e => e.eventType !== 'birthday');
@@ -537,14 +563,12 @@ async function main() {
                     ? ['ID', 'When', 'Dur', 'Event', 'Location', 'Link']
                     : ['ID', 'When', 'Dur', 'Event', 'Location'];
                 const colWidths = headers.map((h, i) => Math.max(h.length, ...rows.map(r => (r[i] || '').length)));
-                // Print header
-                const headerLine = headers.map((h, i) => h.padEnd(colWidths[i])).join('  ');
-                console.log(headerLine);
+                const lastIdx = headers.length - 1;
+                const padCell = (s, i) => i === lastIdx ? s : s.padEnd(colWidths[i]);
+                console.log(headers.map(padCell).join('  '));
                 console.log(colWidths.map(w => '-'.repeat(w)).join('  '));
-                // Print rows
                 for (const row of rows) {
-                    const line = row.map((cell, i) => (cell || '').padEnd(colWidths[i])).join('  ');
-                    console.log(line);
+                    console.log(row.map((cell, i) => padCell(cell || '', i)).join('  '));
                 }
             }
             if (birthdayCount > 0 && !parsed.birthdays) {

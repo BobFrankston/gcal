@@ -21,6 +21,8 @@ gcal <command> [options]           Run command
 |---------|-------------|
 | `list [n]` | List upcoming n events (default: 10) |
 | `list -since <date>` | List events from `<date>` forward (past dates allowed) |
+| `list -till <date>` | List events up to `<date>` |
+| `list -since <d1> -till <d2>` | List events in a date range |
 | `add <title> <when> [duration]` | Add event (explicit args) |
 | `add` | Add event (type description interactively) |
 | `add "free text description"` | Add event (AI parses single text arg) |
@@ -46,6 +48,7 @@ gcal <command> [options]           Run command
 | `-clip` | Read from clipboard (for add command) |
 | `-r`, `-reminder <dur>` | Add popup reminder (e.g., 30m, 1h); repeatable |
 | `-since <date>` | Start listing from `<date>` (e.g. `"10 days ago"`, `"April 1"`, `yesterday`) |
+| `-till <date>` | End listing at `<date>` |
 | `-all` | Delete all instances of recurring event |
 
 ## Examples
@@ -54,6 +57,7 @@ gcal <command> [options]           Run command
 gcal meeting.ics                        # Import ICS file
 gcal list                               # List next 10 events
 gcal list -since "10 days ago"          # Include events from 10 days ago forward
+gcal list -since "april 1" -till "may 1" # Events in April
 gcal list -since "april 1" -n 50        # 50 events since April 1
 gcal add "Dentist" "Friday 3pm" "1h"
 gcal add "Lunch" "1/14/2026 12:00" "1h"
