@@ -49,6 +49,12 @@ export declare function formatDuration(start: {
 export declare function parseDuration(duration: string): number;
 /** Parse natural date/time strings */
 export declare function parseDateTime(input: string): Date;
+/** True if input string contains a time-of-day component (e.g. "3pm", "15:30", "at 3") */
+export declare function hasTimeComponent(input: string): boolean;
+/** Parse "YYYY-MM-DD" to a local Date at midnight (avoids UTC shift) */
+export declare function parseAllDay(dateStr: string): Date;
+/** Format a Date as "YYYY-MM-DD" in local time */
+export declare function formatYMD(d: Date): string;
 /** Timestamp for logging */
 export declare function ts(): string;
 //# sourceMappingURL=gutils.d.ts.map

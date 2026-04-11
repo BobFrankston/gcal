@@ -12,7 +12,7 @@ import path from 'path';
 import { execSync } from 'child_process';
 import { createInterface } from 'readline/promises';
 import { authenticateOAuth } from '@bobfrankston/oauthsupport';
-import { CREDENTIALS_FILE, loadConfig, saveConfig, getUserPaths, ensureUserDir, formatDateTime, formatDuration, parseDuration, parseDateTime, ts, normalizeUser } from './glib/gutils.js';
+import { CREDENTIALS_FILE, loadConfig, saveConfig, getUserPaths, ensureUserDir, formatDateTime, formatDuration, parseDuration, parseDateTime, hasTimeComponent, parseAllDay, formatYMD, ts, normalizeUser } from './glib/gutils.js';
 import { extractEventsFromText, readClipboard } from './glib/aihelper.js';
 import pkg from './package.json' with { type: 'json' };
 const VERSION = pkg.version;
@@ -205,12 +205,15 @@ Usage:
 
 Commands:
   list [n]                           List upcoming n events (default: 10)
+  list -since <date>                 List events from <date> forward (past ok)
   add <title> <when> [duration]      Add event (explicit args)
   add                                Add event (type description interactively)
   add "free text description"        Add event (AI parses single text arg)
   add -clip                          Add event from clipboard text (AI-parsed)
   del|delete <id> [id2...]           Delete event(s) by ID (prefix match)
   remind <id> <dur> [dur2...]        Add reminder(s) to existing event
+  resched <id> <when> [duration]     Reschedule event (preserve duration by default)
+  snooze <id> [when]                 Snooze event (default: +1 day)
   import <file.ics>                  Import events from ICS file
   calendars                          List available calendars
   assoc                              Set up .ics file association (Windows)
@@ -224,11 +227,14 @@ Options:
   -b, -birthdays           Include birthday events (hidden by default)
   -clip                    Read from clipboard (for add command)
   -r, -reminder <dur>      Add popup reminder (e.g., 30m, 1h); repeatable
+  -since <date>            Start listing from <date> (e.g. "10 days ago", "April 1")
   -all                     Delete all instances of recurring event
 
 Examples:
   gcal meeting.ics                        Import ICS file
   gcal list                               List next 10 events
+  gcal list -since "10 days ago"          List events from 10 days ago forward
+  gcal list -since "april 1" -n 50        List 50 events since April 1
   gcal add "Dentist" "Friday 3pm" "1h"
   gcal add "Lunch" "1/14/2026 12:00" "1h"
   gcal add "Meeting" "tomorrow 10:00"
@@ -237,6 +243,10 @@ Examples:
   gcal add -clip                          Add from clipboard text
   gcal add "Dentist" "Friday 3pm" -r 30m  Add with 30-min reminder
   gcal remind abc12345 30m                Add 30-min reminder to event
+  gcal resched abc12345 "next friday 3pm" Reschedule to new date/time
+  gcal resched abc12345 tomorrow          Move to tomorrow (preserve time-of-day)
+  gcal snooze abc12345                    Snooze event +1 day
+  gcal snooze abc12345 +1w                Snooze event +1 week
   gcal add                                Type event description (one or multiple)
   gcal -u bob@gmail.com                   Set default user
 
@@ -301,6 +311,18 @@ function parseArgs(argv) {
                 const val = argv[++i] || '';
                 const mins = parseDuration(val);
                 result.reminders.push(mins);
+                break;
+            }
+            case '-since':
+            case '--since': {
+                const val = argv[++i] || '';
+                try {
+                    result.since = parseDateTime(val);
+                }
+                catch {
+                    console.error(`Invalid -since value: ${val}`);
+                    process.exit(1);
+                }
                 break;
             }
             case '-h':
@@ -481,16 +503,20 @@ async function main() {
         case 'list': {
             const count = parsed.args[0] ? parseInt(parsed.args[0]) : parsed.count;
             const token = await getAccessToken(user, false);
-            let events = await listEvents(token, parsed.calendar, count);
+            const timeMin = parsed.since ? parsed.since.toISOString() : undefined;
+            let events = await listEvents(token, parsed.calendar, count, timeMin);
             const birthdayCount = events.filter(e => e.eventType === 'birthday').length;
             if (!parsed.birthdays) {
                 events = events.filter(e => e.eventType !== 'birthday');
             }
             if (events.length === 0) {
-                console.log('No upcoming events found.');
+                console.log(parsed.since ? 'No events found.' : 'No upcoming events found.');
             }
             else {
-                console.log(`\nUpcoming events (${events.length}):\n`);
+                const label = parsed.since
+                    ? `Events since ${formatDateTime({ dateTime: parsed.since.toISOString() })}`
+                    : 'Upcoming events';
+                console.log(`\n${label} (${events.length}):\n`);
                 // Build table data
                 const rows = [];
                 for (const event of events) {
@@ -731,6 +757,129 @@ async function main() {
             for (const m of reminderMins) {
                 console.log(`  Reminder: ${m >= 60 ? `${m / 60}h` : `${m}m`} before`);
             }
+            break;
+        }
+        case 'resched':
+        case 'reschedule':
+        case 'snooze': {
+            if (parsed.args.length < 1) {
+                console.error('Usage: gcal resched <id> <when> [duration]');
+                console.error('       gcal snooze <id> [when]   (default: +1d)');
+                console.error('  e.g.: gcal resched abc12345 "next friday 3pm"');
+                console.error('  e.g.: gcal resched abc12345 tomorrow');
+                console.error('  e.g.: gcal snooze abc12345 +1w');
+                console.error('Use "gcal list" to see event IDs');
+                process.exit(1);
+            }
+            const idPrefix = parsed.args[0];
+            let whenArg = parsed.args[1];
+            const durationArg = parsed.args[2];
+            // Default lookback: -since if provided, else 30 days back (so stale reminders are findable)
+            const lookback = parsed.since
+                ? parsed.since.toISOString()
+                : new Date(Date.now() - 30 * 86400_000).toISOString();
+            const token = await getAccessToken(user, true);
+            const events = await listEvents(token, parsed.calendar, 250, lookback);
+            let matches = events.filter(e => e.id?.startsWith(idPrefix));
+            if (!parsed.birthdays) {
+                matches = matches.filter(e => e.eventType !== 'birthday');
+            }
+            const unique = [...new Map(matches.map(e => [(e.id || '').split('_')[0], e])).values()];
+            if (unique.length === 0) {
+                console.error(`${idPrefix}: not found (searched from ${lookback.slice(0, 10)})`);
+                process.exit(1);
+            }
+            if (unique.length > 1) {
+                console.error(`${idPrefix}: ambiguous (${unique.length} matches)`);
+                for (const e of unique) {
+                    console.error(`  ${e.id?.slice(0, 8)} - ${e.summary}`);
+                }
+                process.exit(1);
+            }
+            const event = unique[0];
+            if (!whenArg) {
+                if (parsed.command === 'snooze') {
+                    whenArg = '+1d';
+                }
+                else {
+                    console.error('Usage: gcal resched <id> <when> [duration]');
+                    process.exit(1);
+                }
+            }
+            const origIsAllDay = !!event.start?.date;
+            let patch;
+            let newStartDisplay;
+            let newEndDisplay;
+            if (origIsAllDay) {
+                const origStart = parseAllDay(event.start.date);
+                const origEnd = parseAllDay(event.end.date);
+                const origDurDays = Math.max(1, Math.round((origEnd.getTime() - origStart.getTime()) / 86400_000));
+                let newStart;
+                const adv = whenArg.match(/^\+(\d+)([dw])$/i);
+                if (adv) {
+                    const [, n, unit] = adv;
+                    const amt = parseInt(n);
+                    newStart = new Date(origStart);
+                    newStart.setDate(newStart.getDate() + (unit.toLowerCase() === 'w' ? amt * 7 : amt));
+                }
+                else {
+                    newStart = parseDateTime(whenArg);
+                    newStart.setHours(0, 0, 0, 0);
+                }
+                const newEnd = new Date(newStart);
+                newEnd.setDate(newEnd.getDate() + origDurDays);
+                patch = {
+                    start: { date: formatYMD(newStart) },
+                    end: { date: formatYMD(newEnd) }
+                };
+                newStartDisplay = { date: formatYMD(newStart) };
+                newEndDisplay = { date: formatYMD(newEnd) };
+            }
+            else {
+                const origStart = new Date(event.start.dateTime);
+                const origEnd = new Date(event.end.dateTime);
+                const origDurMs = origEnd.getTime() - origStart.getTime();
+                let newStart;
+                const adv = whenArg.match(/^\+(\d+)([dwhm])$/i);
+                if (adv) {
+                    const [, n, unit] = adv;
+                    const amt = parseInt(n);
+                    newStart = new Date(origStart);
+                    switch (unit.toLowerCase()) {
+                        case 'd':
+                            newStart.setDate(newStart.getDate() + amt);
+                            break;
+                        case 'w':
+                            newStart.setDate(newStart.getDate() + amt * 7);
+                            break;
+                        case 'h':
+                            newStart.setHours(newStart.getHours() + amt);
+                            break;
+                        case 'm':
+                            newStart.setMinutes(newStart.getMinutes() + amt);
+                            break;
+                    }
+                }
+                else {
+                    newStart = parseDateTime(whenArg);
+                    if (!hasTimeComponent(whenArg)) {
+                        newStart.setHours(origStart.getHours(), origStart.getMinutes(), 0, 0);
+                    }
+                }
+                const durMs = durationArg ? parseDuration(durationArg) * 60_000 : origDurMs;
+                const newEnd = new Date(newStart.getTime() + durMs);
+                const tz = event.start.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone;
+                patch = {
+                    start: { dateTime: newStart.toISOString(), timeZone: tz },
+                    end: { dateTime: newEnd.toISOString(), timeZone: tz }
+                };
+                newStartDisplay = patch.start;
+                newEndDisplay = patch.end;
+            }
+            const updated = await patchEvent(token, event.id, patch, parsed.calendar);
+            console.log(`Rescheduled: ${updated.summary}`);
+            console.log(`  From: ${formatDateTime(event.start)} - ${formatDateTime(event.end)}`);
+            console.log(`  To:   ${formatDateTime(newStartDisplay)} - ${formatDateTime(newEndDisplay)}`);
             break;
         }
         default:

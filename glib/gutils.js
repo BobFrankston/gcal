@@ -194,13 +194,42 @@ export function parseDateTime(input) {
         d.setDate(d.getDate() + 1);
         return d;
     }
-    // Handle "tomorrow 2pm" or "tomorrow at 2pm"
-    const relMatch = lower.match(/^(today|tomorrow)\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/i);
+    if (lower === 'yesterday') {
+        const d = new Date(now);
+        d.setDate(d.getDate() - 1);
+        return d;
+    }
+    // Handle "N days/weeks/months/years ago"
+    const agoMatch = lower.match(/^(\d+)\s+(day|week|month|year)s?\s+ago$/);
+    if (agoMatch) {
+        const [, n, unit] = agoMatch;
+        const amount = parseInt(n);
+        const d = new Date(now);
+        switch (unit) {
+            case 'day':
+                d.setDate(d.getDate() - amount);
+                break;
+            case 'week':
+                d.setDate(d.getDate() - amount * 7);
+                break;
+            case 'month':
+                d.setMonth(d.getMonth() - amount);
+                break;
+            case 'year':
+                d.setFullYear(d.getFullYear() - amount);
+                break;
+        }
+        return d;
+    }
+    // Handle "tomorrow 2pm" or "yesterday at 2pm" etc.
+    const relMatch = lower.match(/^(today|tomorrow|yesterday)\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/i);
     if (relMatch) {
         const [, rel, hour, min, ampm] = relMatch;
         const d = new Date(now);
         if (rel === 'tomorrow')
             d.setDate(d.getDate() + 1);
+        else if (rel === 'yesterday')
+            d.setDate(d.getDate() - 1);
         let h = parseInt(hour);
         if (ampm?.toLowerCase() === 'pm' && h < 12)
             h += 12;
@@ -294,6 +323,23 @@ export function parseDateTime(input) {
         return parsed;
     }
     throw new Error(`Cannot parse date/time: ${input}`);
+}
+/** True if input string contains a time-of-day component (e.g. "3pm", "15:30", "at 3") */
+export function hasTimeComponent(input) {
+    const lower = input.toLowerCase();
+    return /\d{1,2}:\d{2}/.test(lower) || /\d{1,2}\s*(am|pm)\b/.test(lower) || /\bat\s+\d/.test(lower);
+}
+/** Parse "YYYY-MM-DD" to a local Date at midnight (avoids UTC shift) */
+export function parseAllDay(dateStr) {
+    const [y, mo, d] = dateStr.split('-').map(Number);
+    return new Date(y, mo - 1, d);
+}
+/** Format a Date as "YYYY-MM-DD" in local time */
+export function formatYMD(d) {
+    const y = d.getFullYear();
+    const mo = String(d.getMonth() + 1).padStart(2, '0');
+    const da = String(d.getDate()).padStart(2, '0');
+    return `${y}-${mo}-${da}`;
 }
 /** Timestamp for logging */
 export function ts() {
