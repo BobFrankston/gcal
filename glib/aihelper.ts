@@ -142,6 +142,94 @@ export async function extractEventsFromText(text: string): Promise<ExtractedEven
     }
 }
 
+export interface ExtractedTask {
+    title: string;
+    due?: string;       /** YYYY-MM-DD, optional */
+    notes?: string;
+}
+
+const TASK_EXTRACTION_PROMPT = `Extract to-do tasks from the user's text and return ONLY valid JSON.
+
+Today's date is {{TODAY}}.
+
+The text may describe one or multiple tasks. Always return a JSON array of task objects.
+
+Output format:
+[
+  {
+    "title": "Task title",
+    "due": "YYYY-MM-DD",
+    "notes": "optional details"
+  }
+]
+
+Rules:
+- title: concise task title (imperative if natural, e.g. "Call plumber")
+- due: date-only (YYYY-MM-DD). Resolve relative dates ("tomorrow", "next Friday") using today's date. Omit if no date is implied.
+- notes: include supporting details the title doesn't already capture. Omit if none.
+- Google Tasks ignores time-of-day, so do not include hours/minutes.
+- Return ONLY the JSON array, no markdown, no explanation`;
+
+export async function extractTasksFromText(text: string): Promise<ExtractedTask[]> {
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) {
+        const home = process.env.HOME || process.env.USERPROFILE || '';
+        const appData = process.env.APPDATA || path.join(home, '.config');
+        const keysPath = path.join(appData, 'gcards', 'keys.env');
+        console.error(`\nANTHROPIC_API_KEY not set.`);
+        console.error(`Add it to: ${keysPath}`);
+        console.error(`Format: ANTHROPIC_API_KEY=sk-ant-...\n`);
+        return [];
+    }
+
+    const today = new Date().toISOString().split('T')[0];
+    const dayName = new Date().toLocaleDateString('en-US', { weekday: 'long' });
+    const systemPrompt = TASK_EXTRACTION_PROMPT
+        .replace('{{TODAY}}', `${today} (${dayName})`);
+
+    try {
+        const response = await fetch('https://api.anthropic.com/v1/messages', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'x-api-key': apiKey,
+                'anthropic-version': '2023-06-01'
+            },
+            body: JSON.stringify({
+                model: 'claude-haiku-4-5-20251001',
+                max_tokens: 512,
+                system: systemPrompt,
+                messages: [{ role: 'user', content: text }]
+            })
+        });
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error(`Claude API error: ${response.status} ${errorText}`);
+            return [];
+        }
+
+        const data = await response.json() as any;
+        const content = data.content?.[0]?.text;
+        if (!content) return [];
+
+        const jsonMatch = content.match(/\[[\s\S]*\]/);
+        if (!jsonMatch) {
+            const objMatch = content.match(/\{[\s\S]*\}/);
+            if (!objMatch) {
+                console.error('No JSON found in AI response');
+                return [];
+            }
+            return [JSON.parse(objMatch[0]) as ExtractedTask];
+        }
+        const parsed = JSON.parse(jsonMatch[0]);
+        return Array.isArray(parsed) ? parsed as ExtractedTask[] : [parsed as ExtractedTask];
+    } catch (error) {
+        console.error(`Error extracting tasks: ${error}`);
+        return [];
+    }
+}
+
 /** Read clipboard text (cross-platform via clipboardy) */
 export function readClipboard(): string {
     try {

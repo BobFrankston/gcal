@@ -913,7 +913,9 @@ async function main() {
     }
 }
 if (import.meta.main) {
-    main().catch(e => {
+    main()
+        .then(() => process.exit(0))
+        .catch(e => {
         console.error(`Error: ${e.message}`);
         process.exit(1);
     });

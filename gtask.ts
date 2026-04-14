@@ -13,6 +13,7 @@ import {
     listTaskLists, listTasks, createTask, patchTask, deleteTask,
     moveTask, clearCompleted, resolveTaskList
 } from './glib/tasksapi.js';
+import { extractTasksFromText, readClipboard } from './glib/aihelper.js';
 import type { Task } from './glib/tasktypes.js';
 
 import pkg from './package.json' with { type: 'json' };
@@ -27,6 +28,7 @@ interface ParsedArgs {
     title: string;       /** -t <title> for edit */
     when: string;        /** -when <date> for edit */
     showAll: boolean;    /** -a: include completed */
+    clip: boolean;       /** -clip: AI-parse from clipboard */
     help: boolean;
     helpCmd: string;     /** `gtask help <cmd>` */
 }
@@ -38,6 +40,8 @@ Usage: gtask <command> [options]
 
 Commands:
   add <title> [when]           Add a task (optional due date)
+  add -clip                    AI-parse task(s) from clipboard
+  add "<freeform text>"        AI-parse task(s) from a single argument
   list                         List open tasks
   lists                        List all tasklists
   done <id>                    Mark task completed (id prefix)
@@ -55,14 +59,23 @@ Global options:
 
 const USAGE: Record<string, string> = {
     add: `gtask add <title> [when] [-l <list>] [-n <notes>]
-  Add a task. <when> is an optional due date (date-only; time is ignored
+       gtask add -clip [-l <list>]
+       gtask add "<freeform text>" [-l <list>]
+
+  Explicit mode: supply title and optional <when> (date-only; time is ignored
   by Google Tasks). Wrap multi-word titles in quotes.
+
+  AI mode: with -clip the clipboard is parsed into one or more tasks via
+  Claude. A single quoted argument is parsed the same way. With no args
+  and no -clip, you'll be prompted to type the description.
 
   Examples:
     gtask add "Write report"
     gtask add "Write report" friday
     gtask add "Pay bills" "april 30" -n "rent + utilities"
     gtask add "Call plumber" tomorrow -l Errands
+    gtask add -clip
+    gtask add "call dentist tomorrow, pick up rx friday"
 `,
     list: `gtask list [-l <list>] [-a] [-since <date>] [-till <date>]
   List open tasks in a tasklist.
@@ -133,6 +146,7 @@ function parseArgs(argv: string[]): ParsedArgs {
         title: '',
         when: '',
         showAll: false,
+        clip: false,
         help: false,
         helpCmd: ''
     };
@@ -170,6 +184,10 @@ function parseArgs(argv: string[]): ParsedArgs {
             case '-all':
             case '--all':
                 result.showAll = true;
+                break;
+            case '-clip':
+            case '--clip':
+                result.clip = true;
                 break;
             case '-h':
             case '-help':
@@ -326,22 +344,72 @@ async function main(): Promise<void> {
         }
 
         case 'add': {
-            if (parsed.args.length < 1) {
-                showUsage('add');
+            // Explicit mode: gtask add "title" [when]
+            if (parsed.args.length >= 2 && !parsed.clip) {
+                const [title, when] = parsed.args;
+                const task: Task = { title };
+                if (when) task.due = buildDue(when);
+                if (parsed.notes) task.notes = parsed.notes;
+
+                const token = await getAccessToken(user, true);
+                const tl = await resolveTaskList(token, parsed.list);
+                const created = await createTask(token, task, tl.id!);
+                console.log(`\nTask created in ${tl.title}: ${created.title}`);
+                if (created.due) console.log(`  Due: ${dueToYMD(created.due)}`);
+                if (created.notes) console.log(`  Notes: ${created.notes}`);
+                console.log(`  ID: ${(created.id || '').slice(0, 8)}`);
+                break;
+            }
+
+            // AI mode: freeform text from clipboard, single arg, or prompt
+            let inputText: string;
+            if (parsed.clip) {
+                console.log('Reading from clipboard...');
+                inputText = readClipboard();
+                if (!inputText) {
+                    console.error('Clipboard is empty');
+                    process.exit(1);
+                }
+                console.log(`Clipboard: ${inputText.substring(0, 200)}${inputText.length > 200 ? '...' : ''}`);
+            } else if (parsed.args.length === 1) {
+                inputText = parsed.args[0].trim();
+                if (!inputText) {
+                    console.error('Task description is empty');
+                    process.exit(1);
+                }
+            } else {
+                const rl = createInterface({ input: process.stdin, output: process.stdout });
+                inputText = (await rl.question('Describe the task(s): ')).trim();
+                rl.close();
+                if (!inputText) {
+                    console.error('No input provided');
+                    process.exit(1);
+                }
+            }
+
+            console.log('Extracting task details...');
+            const extracted = await extractTasksFromText(inputText);
+            if (extracted.length === 0) {
+                console.error('Failed to extract task details from text');
                 process.exit(1);
             }
-            const [title, when] = parsed.args;
-            const task: Task = { title };
-            if (when) task.due = buildDue(when);
-            if (parsed.notes) task.notes = parsed.notes;
 
             const token = await getAccessToken(user, true);
             const tl = await resolveTaskList(token, parsed.list);
-            const created = await createTask(token, task, tl.id!);
-            console.log(`\nTask created in ${tl.title}: ${created.title}`);
-            if (created.due) console.log(`  Due: ${dueToYMD(created.due)}`);
-            if (created.notes) console.log(`  Notes: ${created.notes}`);
-            console.log(`  ID: ${(created.id || '').slice(0, 8)}`);
+            console.log(`\nCreating ${extracted.length} task(s) in ${tl.title}:\n`);
+            for (const e of extracted) {
+                if (!e.title) {
+                    console.error('  AI returned task with no title — skipping');
+                    continue;
+                }
+                const task: Task = { title: e.title };
+                if (e.due) task.due = `${e.due}T00:00:00.000Z`;
+                if (e.notes) task.notes = e.notes;
+                if (parsed.notes && !task.notes) task.notes = parsed.notes;
+                const created = await createTask(token, task, tl.id!);
+                console.log(`  ${(created.id || '').slice(0, 8)}  ${created.title}${created.due ? `  (due ${dueToYMD(created.due)})` : ''}`);
+                if (created.notes) console.log(`    Notes: ${created.notes}`);
+            }
             break;
         }
 
@@ -452,8 +520,10 @@ async function main(): Promise<void> {
 }
 
 if (import.meta.main) {
-    main().catch(e => {
-        console.error(`Error: ${e.message}`);
-        process.exit(1);
-    });
+    main()
+        .then(() => process.exit(0))
+        .catch(e => {
+            console.error(`Error: ${e.message}`);
+            process.exit(1);
+        });
 }
