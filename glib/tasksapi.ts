@@ -7,11 +7,22 @@ import type { Task, TaskList, TasksResponse, TaskListsResponse } from './tasktyp
 
 const TASKS_API_BASE = 'https://tasks.googleapis.com/tasks/v1';
 
+async function errorBody(res: Response): Promise<string> {
+    try {
+        const text = await res.text();
+        const parsed = JSON.parse(text) as { error?: { message?: string } };
+        return parsed.error?.message || text.slice(0, 500);
+    } catch {
+        return '';
+    }
+}
+
 export async function listTaskLists(accessToken: string): Promise<TaskList[]> {
     const url = `${TASKS_API_BASE}/users/@me/lists?maxResults=100`;
     const res = await apiFetch(url, accessToken);
     if (!res.ok) {
-        throw new Error(`Failed to list tasklists: ${res.status} ${res.statusText}`);
+        const detail = await errorBody(res);
+        throw new Error(`Failed to list tasklists: ${res.status} ${res.statusText}${detail ? '\n  ' + detail : ''}`);
     }
     const data = await res.json() as TaskListsResponse;
     return data.items || [];

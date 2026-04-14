@@ -64,6 +64,11 @@ export async function getAccessToken(
         console.log(`${ts()} Token expired, refreshing...`);
     }
 
+    if (fs.existsSync(tokenFilePath) && !tokenCoversScopes(tokenFilePath, scope)) {
+        fs.unlinkSync(tokenFilePath);
+        console.log(`${ts()} Cached token missing required scopes; re-consenting...`);
+    }
+
     const token = await authenticateOAuth(CREDENTIALS_FILE, {
         scope,
         tokenDirectory: paths.userDir,
@@ -77,6 +82,19 @@ export async function getAccessToken(
     }
 
     return token.access_token;
+}
+
+/** Return true if the cached token's scope field covers every required scope. */
+function tokenCoversScopes(tokenFilePath: string, requiredScope: string): boolean {
+    try {
+        const raw = fs.readFileSync(tokenFilePath, 'utf8');
+        const cached = JSON.parse(raw) as { scope?: string };
+        const have = new Set((cached.scope || '').split(/\s+/).filter(Boolean));
+        const need = requiredScope.split(/\s+/).filter(Boolean);
+        return need.every(s => have.has(s));
+    } catch {
+        return false;
+    }
 }
 
 export async function apiFetch(
