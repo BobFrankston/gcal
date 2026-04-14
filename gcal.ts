@@ -12,81 +12,18 @@ import fs from 'fs';
 import path from 'path';
 import { execSync } from 'child_process';
 import { createInterface } from 'readline/promises';
-import { authenticateOAuth } from '@bobfrankston/oauthsupport';
 import type { GoogleEvent, EventsListResponse, CalendarListEntry, CalendarListResponse } from './glib/types.ts';
 import {
-    CREDENTIALS_FILE, loadConfig, saveConfig, getUserPaths,
-    ensureUserDir, formatDateTime, formatDuration, parseDuration, parseDateTime,
-    hasTimeComponent, parseAllDay, formatYMD, ts, normalizeUser
+    loadConfig, saveConfig,
+    formatDateTime, formatDuration, parseDuration, parseDateTime,
+    hasTimeComponent, parseAllDay, formatYMD, normalizeUser
 } from './glib/gutils.js';
+import { setupAbortHandler, getAccessToken, apiFetch } from './glib/goauth.js';
 import { extractEventsFromText, readClipboard } from './glib/aihelper.js';
 
 import pkg from './package.json' with { type: 'json' };
 const VERSION: string = pkg.version;
 const CALENDAR_API_BASE = 'https://www.googleapis.com/calendar/v3';
-const CALENDAR_SCOPE_READ = 'https://www.googleapis.com/auth/calendar.readonly';
-const CALENDAR_SCOPE_WRITE = 'https://www.googleapis.com/auth/calendar';
-
-let abortController: AbortController = null;
-
-function setupAbortHandler(): void {
-    abortController = new AbortController();
-    let ctrlCCount = 0;
-    process.on('SIGINT', () => {
-        ctrlCCount++;
-        abortController?.abort();
-        if (ctrlCCount >= 2) {
-            console.log('\n\nForce exit.');
-            process.exit(1);
-        }
-        console.log('\n\nCtrl+C pressed - aborting... (press again to force exit)');
-    });
-}
-
-async function getAccessToken(user: string, writeAccess = false, forceRefresh = false): Promise<string> {
-    if (!fs.existsSync(CREDENTIALS_FILE)) {
-        console.error(`\nCredentials file not found: ${CREDENTIALS_FILE}\n`);
-        console.error(`gcal uses the same credentials as gcards.`);
-        console.error(`Make sure gcards is set up with OAuth credentials first.`);
-        console.error(`See: https://github.com/BobFrankston/oauthsupport/blob/master/SETUP-GOOGLE-OAUTH.md`);
-        process.exit(1);
-    }
-
-    const paths = getUserPaths(user);
-    ensureUserDir(user);
-
-    const scope = writeAccess ? CALENDAR_SCOPE_WRITE : CALENDAR_SCOPE_READ;
-    const tokenFileName = writeAccess ? 'token-write.json' : 'token.json';
-    const tokenFilePath = path.join(paths.userDir, tokenFileName);
-
-    if (forceRefresh && fs.existsSync(tokenFilePath)) {
-        fs.unlinkSync(tokenFilePath);
-        console.log(`${ts()} Token expired, refreshing...`);
-    }
-
-    const token = await authenticateOAuth(CREDENTIALS_FILE, {
-        scope,
-        tokenDirectory: paths.userDir,
-        tokenFileName,
-        credentialsKey: 'installed',
-        signal: abortController?.signal
-    });
-
-    if (!token) {
-        throw new Error('OAuth authentication failed');
-    }
-
-    return token.access_token;
-}
-
-async function apiFetch(url: string, accessToken: string, options: RequestInit = {}): Promise<Response> {
-    const headers = {
-        'Authorization': `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
-        ...options.headers
-    };
-    return fetch(url, { ...options, headers });
-}
 
 async function listCalendars(accessToken: string): Promise<CalendarListEntry[]> {
     const url = `${CALENDAR_API_BASE}/users/me/calendarList`;
@@ -250,68 +187,119 @@ async function importIcsFile(
     return result;
 }
 
-function showUsage(): void {
-    console.log(`
-gcal v${VERSION} - Google Calendar CLI
+const USAGE_SUMMARY = `gcal v${VERSION} - Google Calendar CLI
 
-Usage:
-  gcal <file.ics>                    Import ICS file (file association)
-  gcal <command> [options]           Run command
+Usage: gcal <file.ics>                Import ICS file (file association)
+       gcal <command> [options]       Run command
+       gcal help <command>            Detailed help for a command
 
 Commands:
-  list [n]                           List upcoming n events (default: 10)
-  list -since <date>                 List events from <date> forward (past ok)
-  list -till <date>                  List events up to <date>
-  list -since <d1> -till <d2>        List events in a date range
-  add <title> <when> [duration]      Add event (explicit args)
-  add                                Add event (type description interactively)
-  add "free text description"        Add event (AI parses single text arg)
-  add -clip                          Add event from clipboard text (AI-parsed)
-  del|delete <id> [id2...]           Delete event(s) by ID (prefix match)
-  remind <id> <dur> [dur2...]        Add reminder(s) to existing event
-  resched <id> <when> [duration]     Reschedule event (preserve duration by default)
-  snooze <id> [when]                 Snooze event (default: +1 day)
-  import <file.ics>                  Import events from ICS file
-  calendars                          List available calendars
-  assoc                              Set up .ics file association (Windows)
-  help                               Show this help
+  list                          List upcoming events
+  add                           Add event (explicit, AI, or interactive)
+  del | delete                  Delete event(s) by ID
+  remind                        Add reminder(s) to existing event
+  resched                       Reschedule event
+  snooze                        Snooze event (default: +1d)
+  import                        Import events from ICS file
+  calendars                     List available calendars
+  assoc                         Set up .ics file association (Windows)
+  help [command]                Show help
 
-Options:
-  -u, -user <email>        Set default Google account
-  -c, -calendar <id>       Calendar ID (default: primary)
-  -n <count>               Number of events to list
-  -v, -verbose             Show event IDs and links
-  -b, -birthdays           Include birthday events (hidden by default)
-  -clip                    Read from clipboard (for add command)
-  -r, -reminder <dur>      Add popup reminder (e.g., 30m, 1h); repeatable
-  -since <date>            Start listing from <date> (e.g. "10 days ago", "April 1")
-  -till <date>             End listing at <date>
-  -all                     Delete all instances of recurring event
+Global options:
+  -u, -user <email>             Set / use default Google account
+  -c, -calendar <id>            Calendar ID (default: primary)
 
-Examples:
-  gcal meeting.ics                        Import ICS file
-  gcal list                               List next 10 events
-  gcal list -since "10 days ago"          List events from 10 days ago forward
-  gcal list -since "april 1" -till "may 1" Events in April
-  gcal list -since "april 1" -n 50        List 50 events since April 1
-  gcal add "Dentist" "Friday 3pm" "1h"
-  gcal add "Lunch" "1/14/2026 12:00" "1h"
-  gcal add "Meeting" "tomorrow 10:00"
-  gcal add "Appointment" "jan 15 2pm"
-  gcal add "Dentist appointment Friday 3pm for 1 hour"
-  gcal add -clip                          Add from clipboard text
-  gcal add "Dentist" "Friday 3pm" -r 30m  Add with 30-min reminder
-  gcal remind abc12345 30m                Add 30-min reminder to event
-  gcal resched abc12345 "next friday 3pm" Reschedule to new date/time
-  gcal resched abc12345 tomorrow          Move to tomorrow (preserve time-of-day)
-  gcal snooze abc12345                    Snooze event +1 day
-  gcal snooze abc12345 +1w                Snooze event +1 week
-  gcal add                                Type event description (one or multiple)
-  gcal -u bob@gmail.com                   Set default user
+Companion tool: gtask  (Google Tasks - shares OAuth with gcal)
+`;
 
-File Association (Windows):
-  gcal assoc                              Set up automatically
-`);
+const USAGE: Record<string, string> = {
+    list: `gcal list [n] [-since <date>] [-till <date>] [-c <calendar>] [-b] [-v]
+  List upcoming events. Default n=10.
+  -since <date>   Start from date (past dates allowed)
+  -till <date>    End at date
+  -b              Include birthday events (hidden by default)
+  -v              Verbose (show full IDs and links)
+
+  Examples:
+    gcal list
+    gcal list 20
+    gcal list -since "10 days ago"
+    gcal list -since "april 1" -till "may 1"
+    gcal list -since "april 1" -n 50
+`,
+    add: `gcal add <title> <when> [duration]      Explicit
+       gcal add "<free text>"                  AI-parsed single arg
+       gcal add -clip                          AI-parsed from clipboard
+       gcal add                                Interactive (type description)
+  Add a calendar event. Default duration 1h. Use -r <dur> to add reminder(s).
+
+  Examples:
+    gcal add "Dentist" "Friday 3pm" "1h"
+    gcal add "Lunch" "1/14/2026 12:00" "1h"
+    gcal add "Meeting" "tomorrow 10:00"
+    gcal add "Appointment" "jan 15 2pm"
+    gcal add "Dentist appointment Friday 3pm for 1 hour"
+    gcal add -clip
+    gcal add "Dentist" "Friday 3pm" -r 30m
+`,
+    del: `gcal del <id> [id2...] [-all] [-b]
+       gcal delete <id> [id2...]
+  Delete event(s) by ID prefix.
+  -all            Delete entire recurring series (not just instance)
+  -b              Allow deletion of birthday events
+`,
+    delete: `gcal delete <id> [id2...] [-all]
+  Alias for "del".
+`,
+    remind: `gcal remind <id> <duration> [duration2...]
+  Add popup reminder(s) to an existing event.
+
+  Examples:
+    gcal remind abc12345 30m
+    gcal remind abc12345 30m 1h
+`,
+    resched: `gcal resched <id> <when> [duration]
+  Reschedule an event. Preserves duration unless [duration] given.
+  If <when> lacks a time-of-day, the original time is preserved.
+  All-day events stay all-day. Searches up to 30 days back by default
+  (widen with -since).
+
+  Examples:
+    gcal resched abc12345 "next friday 3pm"
+    gcal resched abc12345 tomorrow
+    gcal resched abc12345 +1w
+`,
+    snooze: `gcal snooze <id> [when]
+  Like resched, but defaults to +1d if no <when> given.
+
+  Examples:
+    gcal snooze abc12345
+    gcal snooze abc12345 +1w
+`,
+    import: `gcal import <file.ics>
+       gcal <file.ics>                          (via file association)
+  Import events from an iCalendar file.
+`,
+    calendars: `gcal calendars
+  List available calendars (id, name, access role).
+`,
+    assoc: `gcal assoc
+  Set up Windows .ics file association so double-clicking imports to gcal.
+`,
+    help: `gcal help [command]
+  Show summary, or detailed help for a single command.
+`
+};
+
+function showUsage(cmd?: string): void {
+    if (cmd && USAGE[cmd]) {
+        console.log(USAGE[cmd]);
+        return;
+    }
+    if (cmd) {
+        console.error(`Unknown command: ${cmd}\n`);
+    }
+    console.log(USAGE_SUMMARY);
 }
 
 interface ParsedArgs {
@@ -329,6 +317,7 @@ interface ParsedArgs {
     reminders: number[];
     since?: Date;
     till?: Date;
+    helpCmd: string;  /** `gcal help <cmd>` */
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -344,7 +333,8 @@ function parseArgs(argv: string[]): ParsedArgs {
         birthdays: false,
         clip: false,
         all: false,
-        reminders: []
+        reminders: [],
+        helpCmd: ''
     };
 
     const unknown: string[] = [];
@@ -416,7 +406,6 @@ function parseArgs(argv: string[]): ParsedArgs {
             case '-h':
             case '-help':
             case '--help':
-            case 'help':
                 result.help = true;
                 break;
             case '-V':
@@ -445,6 +434,11 @@ function parseArgs(argv: string[]): ParsedArgs {
     if (unknown.length > 0) {
         console.error(`Unknown options: ${unknown.join(', ')}`);
         process.exit(1);
+    }
+
+    if (result.command === 'help') {
+        result.help = true;
+        result.helpCmd = result.args[0] || '';
     }
 
     return result;
@@ -519,8 +513,8 @@ async function main(): Promise<void> {
     }
 
     if (parsed.help) {
-        showUsage();
-        if (process.platform === 'win32' && !checkIcsAssoc()) {
+        showUsage(parsed.helpCmd);
+        if (!parsed.helpCmd && process.platform === 'win32' && !checkIcsAssoc()) {
             console.log('Note: .ics file association not set. Run "gcal assoc" to set it up.');
         }
         process.exit(0);
