@@ -27,6 +27,7 @@ gcal help <command>        # Detailed help for one command
 | Command | Description |
 |---------|-------------|
 | `list [n]` | List upcoming n events (default: 10) |
+| `show <id>` | Show full details for an event (`-json` for raw JSON) |
 | `add <title> <when> [duration]` | Add event (explicit) |
 | `add "<free text>"` | Add event (AI-parsed) |
 | `add -clip` | Add event from clipboard (AI-parsed) |
@@ -54,6 +55,7 @@ gcal help <command>        # Detailed help for one command
 | `-since <date>` | Start listing from `<date>` |
 | `-till <date>` | End listing at `<date>` |
 | `-all` | Delete all instances of recurring event |
+| `-json` | Output raw JSON (for `show`) |
 
 ### Examples
 
@@ -67,11 +69,17 @@ gcal add "Lunch" "1/14/2026 12:00" "1h"
 gcal add "Dentist appointment Friday 3pm for 1 hour"
 gcal add -clip
 gcal add "Dentist" "Friday 3pm" -r 30m
+gcal show abc12345
+gcal show abc12345 -json
 gcal remind abc12345 30m
 gcal resched abc12345 "next friday 3pm"
 gcal snooze abc12345 +1w
 gcal -u bob@gmail.com
 ```
+
+### Conflict / proximity warnings
+
+When adding or rescheduling a timed event, `gcal` prints a warning for any existing event that **overlaps** the new slot or falls within **1 hour before or after** it. In AI-mode `add`, warnings appear before the confirmation prompt so you can cancel. Warnings are informational only — the event is still created.
 
 ### Reschedule / snooze notes
 

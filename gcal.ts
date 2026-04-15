@@ -107,6 +107,66 @@ async function patchEvent(
     return await res.json() as GoogleEvent;
 }
 
+/** Print warnings for events that overlap or fall within 1 hour of [start, end]. */
+async function checkProximity(
+    accessToken: string,
+    calendarId: string,
+    start: Date,
+    end: Date,
+    excludeBaseId?: string
+): Promise<void> {
+    const HOUR = 60 * 60_000;
+    const windowMin = new Date(start.getTime() - HOUR).toISOString();
+    const windowMax = new Date(end.getTime() + HOUR).toISOString();
+    let nearby: GoogleEvent[];
+    try {
+        nearby = await listEvents(accessToken, calendarId, 50, windowMin, windowMax);
+    } catch {
+        return;  // Non-fatal — skip warning on fetch failure
+    }
+
+    const sMs = start.getTime();
+    const eMs = end.getTime();
+    const warnings: string[] = [];
+
+    for (const e of nearby) {
+        if (e.eventType === 'birthday') continue;
+        const baseId = (e.id || '').split('_')[0];
+        if (excludeBaseId && baseId === excludeBaseId) continue;
+        if (!e.start) continue;
+
+        let evStart: number;
+        let evEnd: number;
+        if (e.start.dateTime && e.end?.dateTime) {
+            evStart = new Date(e.start.dateTime).getTime();
+            evEnd = new Date(e.end.dateTime).getTime();
+        } else if (e.start.date && e.end?.date) {
+            evStart = parseAllDay(e.start.date).getTime();
+            evEnd = parseAllDay(e.end.date).getTime();
+        } else {
+            continue;
+        }
+
+        const summary = e.summary || '(no title)';
+        const when = formatDateTime(e.start);
+
+        if (evStart < eMs && evEnd > sMs) {
+            warnings.push(`  OVERLAPS:    ${when}  ${summary}`);
+        } else if (evEnd <= sMs && sMs - evEnd <= HOUR) {
+            const mins = Math.round((sMs - evEnd) / 60_000);
+            warnings.push(`  ${String(mins).padStart(2)}m before:   ${when}  ${summary}`);
+        } else if (evStart >= eMs && evStart - eMs <= HOUR) {
+            const mins = Math.round((evStart - eMs) / 60_000);
+            warnings.push(`  ${String(mins).padStart(2)}m after:    ${when}  ${summary}`);
+        }
+    }
+
+    if (warnings.length > 0) {
+        console.log(`\nWarning: nearby events:`);
+        for (const w of warnings) console.log(w);
+    }
+}
+
 async function importIcsFile(
     filePath: string,
     accessToken: string,
@@ -195,6 +255,7 @@ Usage: gcal <file.ics>                Import ICS file (file association)
 
 Commands:
   list                          List upcoming events
+  show                          Show full details for an event (-json for JSON)
   add                           Add event (explicit, AI, or interactive)
   del | delete                  Delete event(s) by ID
   remind                        Add reminder(s) to existing event
@@ -226,6 +287,15 @@ const USAGE: Record<string, string> = {
     gcal list -since "10 days ago"
     gcal list -since "april 1" -till "may 1"
     gcal list -since "april 1" -n 50
+`,
+    show: `gcal show <id> [-json]
+  Show full details for an event (by ID prefix).
+  -json           Output raw event JSON instead of human-readable text.
+  Searches up to 30 days back; widen with -since.
+
+  Examples:
+    gcal show abc12345
+    gcal show abc12345 -json
 `,
     add: `gcal add <title> <when> [duration]      Explicit
        gcal add "<free text>"                  AI-parsed single arg
@@ -314,6 +384,7 @@ interface ParsedArgs {
     birthdays: boolean;
     clip: boolean;
     all: boolean;
+    json: boolean;
     reminders: number[];
     since?: Date;
     till?: Date;
@@ -333,6 +404,7 @@ function parseArgs(argv: string[]): ParsedArgs {
         birthdays: false,
         clip: false,
         all: false,
+        json: false,
         reminders: [],
         helpCmd: ''
     };
@@ -372,6 +444,10 @@ function parseArgs(argv: string[]): ParsedArgs {
             case '-all':
             case '--all':
                 result.all = true;
+                break;
+            case '-json':
+            case '--json':
+                result.json = true;
                 break;
             case '-r':
             case '-reminder':
@@ -682,6 +758,7 @@ async function main(): Promise<void> {
                 };
 
                 const token = await getAccessToken(user, true);
+                await checkProximity(token, parsed.calendar, startTime, endTime);
                 const created = await createEvent(token, event, parsed.calendar);
                 console.log(`\nEvent created: ${created.summary}`);
                 console.log(`  When: ${formatDateTime(created.start)} - ${formatDateTime(created.end)}`);
@@ -725,6 +802,7 @@ async function main(): Promise<void> {
             }
 
             const localTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+            const token = await getAccessToken(user, true);
             const events: GoogleEvent[] = [];
             for (const extracted of extractedEvents) {
                 const tz = extracted.timeZone || localTz;
@@ -752,6 +830,8 @@ async function main(): Promise<void> {
                 console.log(`  When:  ${formatDateTime(event.start)} - ${formatDateTime(event.end)} (${extracted.duration || '1h'})${tz !== localTz ? ` [${tz}]` : ''}`);
                 if (extracted.location) console.log(`  Where: ${extracted.location}`);
                 if (extracted.description) console.log(`  Note:  ${extracted.description}`);
+
+                await checkProximity(token, parsed.calendar, new Date(startDt), endDate);
             }
 
             if (events.length === 0) {
@@ -776,7 +856,6 @@ async function main(): Promise<void> {
                 break;
             }
 
-            const token = await getAccessToken(user, true);
             for (const event of events) {
                 const created = await createEvent(token, event, parsed.calendar);
                 console.log(`\nEvent created: ${created.summary}`);
@@ -1004,10 +1083,115 @@ async function main(): Promise<void> {
                 newEndDisplay = patch.end!;
             }
 
+            // Proximity check for timed events (skip all-day)
+            if (!origIsAllDay && patch.start?.dateTime && patch.end?.dateTime) {
+                await checkProximity(
+                    token,
+                    parsed.calendar,
+                    new Date(patch.start.dateTime),
+                    new Date(patch.end.dateTime),
+                    (event.id || '').split('_')[0]
+                );
+            }
+
             const updated = await patchEvent(token, event.id!, patch, parsed.calendar);
             console.log(`Rescheduled: ${updated.summary}`);
             console.log(`  From: ${formatDateTime(event.start!)} - ${formatDateTime(event.end!)}`);
             console.log(`  To:   ${formatDateTime(newStartDisplay)} - ${formatDateTime(newEndDisplay)}`);
+            break;
+        }
+
+        case 'show': {
+            if (parsed.args.length < 1) {
+                console.error('Usage: gcal show <id> [-json]');
+                console.error('Use "gcal list" to see event IDs');
+                process.exit(1);
+            }
+
+            const idPrefix = parsed.args[0];
+            const lookback = parsed.since
+                ? parsed.since.toISOString()
+                : new Date(Date.now() - 30 * 86400_000).toISOString();
+            const timeMax = parsed.till ? parsed.till.toISOString() : undefined;
+
+            const token = await getAccessToken(user, false);
+            const events = await listEvents(token, parsed.calendar, 250, lookback, timeMax);
+
+            let matches = events.filter(e => e.id?.startsWith(idPrefix));
+            if (!parsed.birthdays) {
+                matches = matches.filter(e => e.eventType !== 'birthday');
+            }
+            const unique = [...new Map(matches.map(e => [(e.id || '').split('_')[0], e])).values()];
+
+            if (unique.length === 0) {
+                console.error(`${idPrefix}: not found (searched from ${lookback.slice(0, 10)})`);
+                process.exit(1);
+            }
+            if (unique.length > 1) {
+                console.error(`${idPrefix}: ambiguous (${unique.length} matches)`);
+                for (const e of unique) {
+                    console.error(`  ${e.id?.slice(0, 8)} - ${e.summary}`);
+                }
+                process.exit(1);
+            }
+
+            const event = unique[0];
+            if (parsed.json) {
+                console.log(JSON.stringify(event, null, 2));
+                break;
+            }
+
+            console.log(`\n${event.summary || '(no title)'}`);
+            const duration = (event.start && event.end) ? formatDuration(event.start, event.end) : '';
+            const whenLine = event.start && event.end
+                ? `${formatDateTime(event.start)} - ${formatDateTime(event.end)}${duration ? `  (${duration})` : ''}`
+                : '?';
+            console.log(`  When:      ${whenLine}`);
+            if (event.start?.timeZone) {
+                console.log(`  TZ:        ${event.start.timeZone}`);
+            }
+            if (event.location) console.log(`  Where:     ${event.location}`);
+            if (event.description) {
+                const indented = event.description.split('\n').map((l, i) => i === 0 ? l : `             ${l}`).join('\n');
+                console.log(`  Notes:     ${indented}`);
+            }
+            if (event.recurrence?.length) {
+                console.log(`  Repeat:    ${event.recurrence.join('; ')}`);
+            }
+            if (event.recurringEventId) {
+                console.log(`  Series ID: ${event.recurringEventId}`);
+            }
+            if (event.attendees?.length) {
+                console.log(`  Attendees:`);
+                for (const a of event.attendees) {
+                    const name = a.displayName ? `${a.displayName} <${a.email}>` : (a.email || '?');
+                    const status = a.responseStatus ? ` [${a.responseStatus}]` : '';
+                    const role = a.organizer ? ' (organizer)' : a.optional ? ' (optional)' : '';
+                    console.log(`    ${name}${status}${role}`);
+                }
+            }
+            if (event.reminders?.overrides?.length) {
+                console.log(`  Reminders:`);
+                for (const r of event.reminders.overrides) {
+                    const m = r.minutes || 0;
+                    const dur = m >= 60 && m % 60 === 0 ? `${m / 60}h` : `${m}m`;
+                    console.log(`    ${dur} (${r.method || 'popup'})`);
+                }
+            } else if (event.reminders?.useDefault) {
+                console.log(`  Reminders: (calendar default)`);
+            }
+            if (event.creator?.email) {
+                console.log(`  Creator:   ${event.creator.displayName ? `${event.creator.displayName} <${event.creator.email}>` : event.creator.email}`);
+            }
+            if (event.organizer?.email && event.organizer.email !== event.creator?.email) {
+                console.log(`  Organizer: ${event.organizer.displayName ? `${event.organizer.displayName} <${event.organizer.email}>` : event.organizer.email}`);
+            }
+            if (event.hangoutLink) console.log(`  Meet:      ${event.hangoutLink}`);
+            if (event.htmlLink) console.log(`  Link:      ${event.htmlLink}`);
+            console.log(`  Status:    ${event.status || 'confirmed'}`);
+            if (event.created) console.log(`  Created:   ${formatDateTime({ dateTime: event.created })}`);
+            if (event.updated) console.log(`  Updated:   ${formatDateTime({ dateTime: event.updated })}`);
+            console.log(`  ID:        ${event.id}`);
             break;
         }
 
