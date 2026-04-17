@@ -264,12 +264,12 @@ export function parseDateTime(input: string): Date {
         return d;
     }
 
-    // Handle weekday names
-    const weekdays = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-    const dayMatch = lower.match(/^(next\s+)?(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/i);
+    // Handle weekday names (full or 3-letter abbrev: sun/mon/tue/wed/thu/fri/sat)
+    const weekdayAbbr = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+    const dayMatch = lower.match(/^(next\s+)?(sun|mon|tue|wed|thu|fri|sat)[a-z]*\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/i);
     if (dayMatch) {
         const [, next, day, hour, min, ampm] = dayMatch;
-        const targetDay = weekdays.indexOf(day.toLowerCase());
+        const targetDay = weekdayAbbr.indexOf(day.toLowerCase().slice(0, 3));
         const d = new Date(now);
         let daysUntil = targetDay - d.getDay();
         if (daysUntil <= 0 || next) daysUntil += 7;
