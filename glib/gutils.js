@@ -221,6 +221,50 @@ export function parseDateTime(input) {
         }
         return d;
     }
+    // Handle future intervals: "1 week", "2 days", "in 3 months", "3 months from now"
+    const futureMatch = lower.match(/^(?:in\s+)?(\d+)\s+(day|week|month|year)s?(?:\s+from\s+now)?$/);
+    if (futureMatch) {
+        const [, n, unit] = futureMatch;
+        const amount = parseInt(n);
+        const d = new Date(now);
+        switch (unit) {
+            case 'day':
+                d.setDate(d.getDate() + amount);
+                break;
+            case 'week':
+                d.setDate(d.getDate() + amount * 7);
+                break;
+            case 'month':
+                d.setMonth(d.getMonth() + amount);
+                break;
+            case 'year':
+                d.setFullYear(d.getFullYear() + amount);
+                break;
+        }
+        return d;
+    }
+    // Handle shorthand future intervals: "+1w", "+2d", "+3h", "+30m"
+    const shortMatch = lower.match(/^\+(\d+)([dwhm])$/);
+    if (shortMatch) {
+        const [, n, unit] = shortMatch;
+        const amount = parseInt(n);
+        const d = new Date(now);
+        switch (unit) {
+            case 'd':
+                d.setDate(d.getDate() + amount);
+                break;
+            case 'w':
+                d.setDate(d.getDate() + amount * 7);
+                break;
+            case 'h':
+                d.setHours(d.getHours() + amount);
+                break;
+            case 'm':
+                d.setMinutes(d.getMinutes() + amount);
+                break;
+        }
+        return d;
+    }
     // Handle "tomorrow 2pm" or "yesterday at 2pm" etc.
     const relMatch = lower.match(/^(today|tomorrow|yesterday)\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/i);
     if (relMatch) {

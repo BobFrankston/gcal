@@ -25,7 +25,12 @@
       "Bash(git:*)",
       "Bash(npm pack:*)",
       "Bash(npm info:*)",
-      "Bash(npm install:*)"
+      "Bash(npm install:*)",
+      "Bash(ipconfig /all)",
+      "Bash(ipconfig \"/all\")",
+      "Bash(cmd \"/c\" \"ipconfig /all\")",
+      "Bash(cmd \"//c\" \"ipconfig /all\")",
+      "Bash(powershell.exe *)"
     ]
   }
 }
