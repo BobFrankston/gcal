@@ -31,7 +31,7 @@ export declare function normalizeUser(user: string): string;
 export declare function getAllUsers(): string[];
 export declare function matchUsers(pattern: string): string[];
 export declare function resolveUser(cliUser: string, setAsDefault?: boolean): string;
-/** Format datetime for display - yyyy-mm-dd HH:mm format */
+/** Format datetime for display - "dow yyyy-mm-dd HH:mm" (or "dow yyyy-mm-dd" for all-day) */
 export declare function formatDateTime(dt: {
     date?: string;
     dateTime?: string;

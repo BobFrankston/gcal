@@ -164,19 +164,23 @@ export function resolveUser(cliUser: string, setAsDefault = false): string {
     process.exit(1);
 }
 
-/** Format datetime for display - yyyy-mm-dd HH:mm format */
+const WEEKDAY_ABBR = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+
+/** Format datetime for display - "dow yyyy-mm-dd HH:mm" (or "dow yyyy-mm-dd" for all-day) */
 export function formatDateTime(dt: { date?: string; dateTime?: string; timeZone?: string }): string {
     if (dt.date) {
-        return dt.date;  // Already yyyy-mm-dd
+        const dow = WEEKDAY_ABBR[parseAllDay(dt.date).getDay()];
+        return `${dow} ${dt.date}`;
     }
     if (dt.dateTime) {
         const d = new Date(dt.dateTime);
+        const dow = WEEKDAY_ABBR[d.getDay()];
         const yyyy = d.getFullYear();
         const mm = String(d.getMonth() + 1).padStart(2, '0');
         const dd = String(d.getDate()).padStart(2, '0');
         const hh = String(d.getHours()).padStart(2, '0');
         const min = String(d.getMinutes()).padStart(2, '0');
-        return `${yyyy}-${mm}-${dd} ${hh}:${min}`;
+        return `${dow} ${yyyy}-${mm}-${dd} ${hh}:${min}`;
     }
     return '(no time)';
 }
