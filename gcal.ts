@@ -256,6 +256,7 @@ Usage: gcal <file.ics>                Import ICS file (file association)
 Commands:
   list                          List upcoming events
   show                          Show full details for an event (-json for JSON)
+  open                          Open event in browser
   add                           Add event (explicit, AI, or interactive)
   del | delete                  Delete event(s) by ID
   remind                        Add reminder(s) to existing event
@@ -296,6 +297,13 @@ const USAGE: Record<string, string> = {
   Examples:
     gcal show abc12345
     gcal show abc12345 -json
+`,
+    open: `gcal open <id>
+  Open the event in your default browser (uses the htmlLink).
+  Searches up to 30 days back; widen with -since.
+
+  Examples:
+    gcal open abc12345
 `,
     add: `gcal add <title> <when> [duration]      Explicit
        gcal add "<free text>"                  AI-parsed single arg
@@ -526,6 +534,25 @@ function buildReminders(minutes: number[]): GoogleEvent['reminders'] | undefined
         useDefault: false,
         overrides: minutes.map(m => ({ method: 'popup' as const, minutes: m }))
     };
+}
+
+/** Match events by ID prefix and dedup recurring instances to the earliest.
+ *  `events` must be ordered by startTime (as returned by listEvents). */
+function findByPrefix(events: GoogleEvent[], prefix: string, includeBirthdays: boolean): GoogleEvent[] {
+    let matches = events.filter(e => e.id?.startsWith(prefix));
+    if (!includeBirthdays) {
+        matches = matches.filter(e => e.eventType !== 'birthday');
+    }
+    const seen = new Set<string>();
+    const unique: GoogleEvent[] = [];
+    for (const e of matches) {
+        const baseId = (e.id || '').split('_')[0];
+        if (!seen.has(baseId)) {
+            seen.add(baseId);
+            unique.push(e);
+        }
+    }
+    return unique;
 }
 
 function checkIcsAssoc(): boolean {
@@ -879,13 +906,7 @@ async function main(): Promise<void> {
             const events = await listEvents(token, parsed.calendar, 50);
 
             for (const idPrefix of parsed.args) {
-                let matches = events.filter(e => e.id?.startsWith(idPrefix));
-                // Filter out birthdays unless -birthdays flag
-                if (!parsed.birthdays) {
-                    matches = matches.filter(e => e.eventType !== 'birthday');
-                }
-                // Deduplicate recurring event instances (same base ID before '_')
-                const unique = [...new Map(matches.map(e => [(e.id || '').split('_')[0], e])).values()];
+                const unique = findByPrefix(events, idPrefix, parsed.birthdays);
 
                 if (unique.length === 0) {
                     console.error(`${idPrefix}: not found`);
@@ -937,11 +958,7 @@ async function main(): Promise<void> {
             const token = await getAccessToken(user, true);
             const events = await listEvents(token, parsed.calendar, 50);
 
-            let matches = events.filter(e => e.id?.startsWith(idPrefix));
-            if (!parsed.birthdays) {
-                matches = matches.filter(e => e.eventType !== 'birthday');
-            }
-            const unique = [...new Map(matches.map(e => [(e.id || '').split('_')[0], e])).values()];
+            const unique = findByPrefix(events, idPrefix, parsed.birthdays);
 
             if (unique.length === 0) {
                 console.error(`${idPrefix}: not found`);
@@ -990,11 +1007,7 @@ async function main(): Promise<void> {
             const token = await getAccessToken(user, true);
             const events = await listEvents(token, parsed.calendar, 250, lookback);
 
-            let matches = events.filter(e => e.id?.startsWith(idPrefix));
-            if (!parsed.birthdays) {
-                matches = matches.filter(e => e.eventType !== 'birthday');
-            }
-            const unique = [...new Map(matches.map(e => [(e.id || '').split('_')[0], e])).values()];
+            const unique = findByPrefix(events, idPrefix, parsed.birthdays);
 
             if (unique.length === 0) {
                 console.error(`${idPrefix}: not found (searched from ${lookback.slice(0, 10)})`);
@@ -1117,11 +1130,7 @@ async function main(): Promise<void> {
             const token = await getAccessToken(user, false);
             const events = await listEvents(token, parsed.calendar, 250, lookback, timeMax);
 
-            let matches = events.filter(e => e.id?.startsWith(idPrefix));
-            if (!parsed.birthdays) {
-                matches = matches.filter(e => e.eventType !== 'birthday');
-            }
-            const unique = [...new Map(matches.map(e => [(e.id || '').split('_')[0], e])).values()];
+            const unique = findByPrefix(events, idPrefix, parsed.birthdays);
 
             if (unique.length === 0) {
                 console.error(`${idPrefix}: not found (searched from ${lookback.slice(0, 10)})`);
@@ -1192,6 +1201,55 @@ async function main(): Promise<void> {
             if (event.created) console.log(`  Created:   ${formatDateTime({ dateTime: event.created })}`);
             if (event.updated) console.log(`  Updated:   ${formatDateTime({ dateTime: event.updated })}`);
             console.log(`  ID:        ${event.id}`);
+            break;
+        }
+
+        case 'open': {
+            if (parsed.args.length < 1) {
+                console.error('Usage: gcal open <id>');
+                console.error('Use "gcal list" to see event IDs');
+                process.exit(1);
+            }
+
+            const idPrefix = parsed.args[0];
+            const lookback = parsed.since
+                ? parsed.since.toISOString()
+                : new Date(Date.now() - 30 * 86400_000).toISOString();
+            const timeMax = parsed.till ? parsed.till.toISOString() : undefined;
+
+            const token = await getAccessToken(user, false);
+            const events = await listEvents(token, parsed.calendar, 250, lookback, timeMax);
+
+            const unique = findByPrefix(events, idPrefix, parsed.birthdays);
+
+            if (unique.length === 0) {
+                console.error(`${idPrefix}: not found (searched from ${lookback.slice(0, 10)})`);
+                process.exit(1);
+            }
+            if (unique.length > 1) {
+                console.error(`${idPrefix}: ambiguous (${unique.length} matches)`);
+                for (const e of unique) {
+                    console.error(`  ${e.id?.slice(0, 8)} - ${e.summary}`);
+                }
+                process.exit(1);
+            }
+
+            const event = unique[0];
+            if (!event.htmlLink) {
+                console.error(`${idPrefix}: event has no htmlLink`);
+                process.exit(1);
+            }
+
+            console.log(`Opening: ${event.summary || '(no title)'}`);
+            console.log(`  ${event.htmlLink}`);
+
+            if (process.platform === 'win32') {
+                execSync(`start "" "${event.htmlLink}"`, { stdio: 'ignore', shell: 'cmd.exe' });
+            } else if (process.platform === 'darwin') {
+                execSync(`open "${event.htmlLink}"`, { stdio: 'ignore' });
+            } else {
+                execSync(`xdg-open "${event.htmlLink}"`, { stdio: 'ignore' });
+            }
             break;
         }
 
