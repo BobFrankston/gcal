@@ -351,7 +351,8 @@ function parseArgs(argv) {
     let i = 0;
     while (i < argv.length) {
         const arg = argv[i];
-        switch (arg) {
+        const flag = arg.startsWith('-') ? arg.toLowerCase() : arg;
+        switch (flag) {
             case '-u':
             case '-user':
             case '--user':
@@ -424,7 +425,6 @@ function parseArgs(argv) {
             case '--help':
                 result.help = true;
                 break;
-            case '-V':
             case '-version':
             case '--version':
                 console.log(`gcal v${VERSION}`);
@@ -440,7 +440,7 @@ function parseArgs(argv) {
                         result.command = 'import';
                     }
                     else {
-                        result.command = arg;
+                        result.command = arg.toLowerCase();
                     }
                 }
                 else {
@@ -470,7 +470,8 @@ function buildReminders(minutes) {
 /** Match events by ID prefix and dedup recurring instances to the earliest.
  *  `events` must be ordered by startTime (as returned by listEvents). */
 function findByPrefix(events, prefix, includeBirthdays) {
-    let matches = events.filter(e => e.id?.startsWith(prefix));
+    const prefixLower = prefix.toLowerCase();
+    let matches = events.filter(e => (e.id || '').toLowerCase().startsWith(prefixLower));
     if (!includeBirthdays) {
         matches = matches.filter(e => e.eventType !== 'birthday');
     }

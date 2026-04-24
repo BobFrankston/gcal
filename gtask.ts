@@ -155,7 +155,8 @@ function parseArgs(argv: string[]): ParsedArgs {
     let i = 0;
     while (i < argv.length) {
         const arg = argv[i];
-        switch (arg) {
+        const flag = arg.startsWith('-') ? arg.toLowerCase() : arg;
+        switch (flag) {
             case '-u':
             case '-user':
             case '--user':
@@ -194,7 +195,7 @@ function parseArgs(argv: string[]): ParsedArgs {
             case '--help':
                 result.help = true;
                 break;
-            case '-V':
+            case '-v':
             case '-version':
             case '--version':
                 console.log(`gtask v${VERSION}`);
@@ -203,7 +204,7 @@ function parseArgs(argv: string[]): ParsedArgs {
                 if (arg.startsWith('-')) {
                     unknown.push(arg);
                 } else if (!result.command) {
-                    result.command = arg;
+                    result.command = arg.toLowerCase();
                 } else {
                     result.args.push(arg);
                 }
@@ -280,7 +281,8 @@ async function findTask(
         showHidden: includeCompleted,
         maxResults: 100
     });
-    const matches = tasks.filter(t => t.id?.startsWith(idPrefix));
+    const prefixLower = idPrefix.toLowerCase();
+    const matches = tasks.filter(t => (t.id || '').toLowerCase().startsWith(prefixLower));
     if (matches.length === 0) throw new Error(`${idPrefix}: not found`);
     if (matches.length > 1) {
         const list = matches.map(t => `  ${(t.id || '').slice(0, 8)} - ${t.title}`).join('\n');
@@ -496,11 +498,12 @@ async function main(): Promise<void> {
                 process.exit(1);
             }
             // Source: must locate task across all lists since we don't know which
+            const movePrefix = parsed.args[0].toLowerCase();
             let srcList = '';
             let task: Task | undefined;
             for (const l of lists) {
                 const ts = await listTasks(token, l.id!, { showCompleted: true, showHidden: true });
-                const m = ts.find(t => t.id?.startsWith(parsed.args[0]));
+                const m = ts.find(t => (t.id || '').toLowerCase().startsWith(movePrefix));
                 if (m) { task = m; srcList = l.id!; break; }
             }
             if (!task) {
