@@ -29,6 +29,7 @@ interface ParsedArgs {
     when: string;        /** -when <date> for edit */
     showAll: boolean;    /** -a: include completed */
     clip: boolean;       /** -clip: AI-parse from clipboard */
+    ai: boolean;         /** -ai: AI-parse the supplied text/prompt */
     help: boolean;
     helpCmd: string;     /** `gtask help <cmd>` */
 }
@@ -41,7 +42,7 @@ Usage: gtask <command> [options]
 Commands:
   add <title> [when]           Add a task (optional due date)
   add -clip                    AI-parse task(s) from clipboard
-  add "<freeform text>"        AI-parse task(s) from a single argument
+  add -ai "<freeform text>"    AI-parse task(s) from a single argument
   list                         List open tasks
   lists                        List all tasklists
   done <id>                    Mark task completed (id prefix)
@@ -60,14 +61,15 @@ Global options:
 const USAGE: Record<string, string> = {
     add: `gtask add <title> [when] [-l <list>] [-n <notes>]
        gtask add -clip [-l <list>]
-       gtask add "<freeform text>" [-l <list>]
+       gtask add -ai "<freeform text>" [-l <list>]
 
-  Explicit mode: supply title and optional <when> (date-only; time is ignored
-  by Google Tasks). Wrap multi-word titles in quotes.
+  Default mode: the first arg is the literal title and the optional second
+  arg is a due date (date-only; time is ignored by Google Tasks). Wrap
+  multi-word titles in quotes. No AI/network call.
 
-  AI mode: with -clip the clipboard is parsed into one or more tasks via
-  Claude. A single quoted argument is parsed the same way. With no args
-  and no -clip, you'll be prompted to type the description.
+  AI mode (opt-in): -clip parses the clipboard into one or more tasks via
+  Claude. -ai parses the supplied argument the same way; with -ai and no
+  argument you'll be prompted to type the description.
 
   Examples:
     gtask add "Write report"
@@ -75,7 +77,7 @@ const USAGE: Record<string, string> = {
     gtask add "Pay bills" "april 30" -n "rent + utilities"
     gtask add "Call plumber" tomorrow -l Errands
     gtask add -clip
-    gtask add "call dentist tomorrow, pick up rx friday"
+    gtask add -ai "call dentist tomorrow, pick up rx friday"
 `,
     list: `gtask list [-l <list>] [-a] [-since <date>] [-till <date>]
   List open tasks in a tasklist.
@@ -147,6 +149,7 @@ function parseArgs(argv: string[]): ParsedArgs {
         when: '',
         showAll: false,
         clip: false,
+        ai: false,
         help: false,
         helpCmd: ''
     };
@@ -189,6 +192,10 @@ function parseArgs(argv: string[]): ParsedArgs {
             case '-clip':
             case '--clip':
                 result.clip = true;
+                break;
+            case '-ai':
+            case '--ai':
+                result.ai = true;
                 break;
             case '-h':
             case '-help':
@@ -346,8 +353,19 @@ async function main(): Promise<void> {
         }
 
         case 'add': {
-            // Explicit mode: gtask add "title" [when]
-            if (parsed.args.length >= 2 && !parsed.clip) {
+            const aiMode = parsed.clip || parsed.ai;
+
+            // Default (literal) mode: gtask add "title" [when]
+            if (!aiMode) {
+                if (parsed.args.length === 0) {
+                    console.error('Missing task title. Use: gtask add "<title>" [when]');
+                    console.error('For AI parsing use -ai or -clip.');
+                    process.exit(1);
+                }
+                if (parsed.args.length > 2) {
+                    console.error('Too many arguments. Quote multi-word titles.');
+                    process.exit(1);
+                }
                 const [title, when] = parsed.args;
                 const task: Task = { title };
                 if (when) task.due = buildDue(when);
@@ -363,7 +381,7 @@ async function main(): Promise<void> {
                 break;
             }
 
-            // AI mode: freeform text from clipboard, single arg, or prompt
+            // AI mode: freeform text from clipboard, supplied arg, or prompt
             let inputText: string;
             if (parsed.clip) {
                 console.log('Reading from clipboard...');
@@ -373,8 +391,8 @@ async function main(): Promise<void> {
                     process.exit(1);
                 }
                 console.log(`Clipboard: ${inputText.substring(0, 200)}${inputText.length > 200 ? '...' : ''}`);
-            } else if (parsed.args.length === 1) {
-                inputText = parsed.args[0].trim();
+            } else if (parsed.args.length >= 1) {
+                inputText = parsed.args.join(' ').trim();
                 if (!inputText) {
                     console.error('Task description is empty');
                     process.exit(1);

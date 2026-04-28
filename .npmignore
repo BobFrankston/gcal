@@ -28,3 +28,4 @@ tsconfig.json
 .claude/
 node_modules/
 *.tgz
+.commitmsg
