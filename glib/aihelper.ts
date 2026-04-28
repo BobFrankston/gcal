@@ -6,6 +6,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import { createInterface } from 'readline/promises';
 import clipboardy from 'clipboardy';
 
 // Load keys from shared gcards location
@@ -35,6 +36,53 @@ function loadKeysEnv(): void {
 }
 
 loadKeysEnv();
+
+function keysEnvPath(): string {
+    const home = process.env.HOME || process.env.USERPROFILE || '';
+    const appData = process.env.APPDATA || path.join(home, '.config');
+    return path.join(appData, 'gcards', 'keys.env');
+}
+
+/**
+ * Return ANTHROPIC_API_KEY, prompting the user (if interactive) and
+ * persisting to keys.env when it isn't already set. Returns empty string
+ * if the user declines or stdin is non-interactive.
+ */
+async function ensureAnthropicKey(): Promise<string> {
+    const existing = process.env.ANTHROPIC_API_KEY;
+    if (existing) return existing;
+
+    const keysPath = keysEnvPath();
+    if (!process.stdin.isTTY) {
+        console.error(`\nANTHROPIC_API_KEY not set.`);
+        console.error(`Add it to: ${keysPath}`);
+        console.error(`Format: ANTHROPIC_API_KEY=sk-ant-...\n`);
+        return '';
+    }
+
+    console.log(`\nANTHROPIC_API_KEY not set. Will save to ${keysPath}.`);
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    const key = (await rl.question('Paste key (blank to abort): ')).trim();
+    rl.close();
+    if (!key) return '';
+    if (!key.startsWith('sk-ant-')) {
+        console.error('Does not look like an Anthropic key (expected sk-ant-...).');
+        return '';
+    }
+
+    fs.mkdirSync(path.dirname(keysPath), { recursive: true });
+    let content = fs.existsSync(keysPath) ? fs.readFileSync(keysPath, 'utf-8') : '';
+    if (/^ANTHROPIC_API_KEY=/m.test(content)) {
+        content = content.replace(/^ANTHROPIC_API_KEY=.*$/m, `ANTHROPIC_API_KEY=${key}`);
+    } else {
+        if (content && !content.endsWith('\n')) content += '\n';
+        content += `ANTHROPIC_API_KEY=${key}\n`;
+    }
+    fs.writeFileSync(keysPath, content);
+    process.env.ANTHROPIC_API_KEY = key;
+    console.log(`Saved.`);
+    return key;
+}
 
 export interface ExtractedEvent {
     summary: string;
@@ -73,16 +121,8 @@ Rules:
 - Return ONLY the JSON array, no markdown, no explanation`;
 
 export async function extractEventsFromText(text: string): Promise<ExtractedEvent[]> {
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) {
-        const home = process.env.HOME || process.env.USERPROFILE || '';
-        const appData = process.env.APPDATA || path.join(home, '.config');
-        const keysPath = path.join(appData, 'gcards', 'keys.env');
-        console.error(`\nANTHROPIC_API_KEY not set.`);
-        console.error(`Add it to: ${keysPath}`);
-        console.error(`Format: ANTHROPIC_API_KEY=sk-ant-...\n`);
-        return [];
-    }
+    const apiKey = await ensureAnthropicKey();
+    if (!apiKey) return [];
 
     const today = new Date().toISOString().split('T')[0];
     const dayName = new Date().toLocaleDateString('en-US', { weekday: 'long' });
@@ -171,16 +211,8 @@ Rules:
 - Return ONLY the JSON array, no markdown, no explanation`;
 
 export async function extractTasksFromText(text: string): Promise<ExtractedTask[]> {
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) {
-        const home = process.env.HOME || process.env.USERPROFILE || '';
-        const appData = process.env.APPDATA || path.join(home, '.config');
-        const keysPath = path.join(appData, 'gcards', 'keys.env');
-        console.error(`\nANTHROPIC_API_KEY not set.`);
-        console.error(`Add it to: ${keysPath}`);
-        console.error(`Format: ANTHROPIC_API_KEY=sk-ant-...\n`);
-        return [];
-    }
+    const apiKey = await ensureAnthropicKey();
+    if (!apiKey) return [];
 
     const today = new Date().toISOString().split('T')[0];
     const dayName = new Date().toLocaleDateString('en-US', { weekday: 'long' });
