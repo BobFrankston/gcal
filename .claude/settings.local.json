@@ -30,7 +30,8 @@
       "Bash(ipconfig \"/all\")",
       "Bash(cmd \"/c\" \"ipconfig /all\")",
       "Bash(cmd \"//c\" \"ipconfig /all\")",
-      "Bash(powershell.exe *)"
+      "Bash(powershell.exe *)",
+      "Bash(cmd *)"
     ]
   }
 }

@@ -322,7 +322,7 @@ const USAGE: Record<string, string> = {
 `,
     del: `gcal del <id> [id2...] [-all] [-b]
        gcal delete <id> [id2...]
-  Delete event(s) by ID prefix.
+  Delete event(s) by ID prefix. Searches up to 30 days back; widen with -since.
   -all            Delete entire recurring series (not just instance)
   -b              Allow deletion of birthday events
 `,
@@ -903,8 +903,13 @@ async function main(): Promise<void> {
                 process.exit(1);
             }
 
+            const lookback = parsed.since
+                ? parsed.since.toISOString()
+                : new Date(Date.now() - 30 * 86400_000).toISOString();
+            const timeMax = parsed.till ? parsed.till.toISOString() : undefined;
+
             const token = await getAccessToken(user, true);
-            const events = await listEvents(token, parsed.calendar, 50);
+            const events = await listEvents(token, parsed.calendar, 250, lookback, timeMax);
 
             for (const idPrefix of parsed.args) {
                 const unique = findByPrefix(events, idPrefix, parsed.birthdays);
@@ -956,13 +961,18 @@ async function main(): Promise<void> {
             const [idPrefix, ...durationArgs] = parsed.args;
             const reminderMins = durationArgs.map(d => parseDuration(d));
 
+            const lookback = parsed.since
+                ? parsed.since.toISOString()
+                : new Date(Date.now() - 30 * 86400_000).toISOString();
+            const timeMax = parsed.till ? parsed.till.toISOString() : undefined;
+
             const token = await getAccessToken(user, true);
-            const events = await listEvents(token, parsed.calendar, 50);
+            const events = await listEvents(token, parsed.calendar, 250, lookback, timeMax);
 
             const unique = findByPrefix(events, idPrefix, parsed.birthdays);
 
             if (unique.length === 0) {
-                console.error(`${idPrefix}: not found`);
+                console.error(`${idPrefix}: not found (searched from ${lookback.slice(0, 10)})`);
                 process.exit(1);
             }
             if (unique.length > 1) {
