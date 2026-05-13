@@ -74,6 +74,7 @@ export async function getAccessToken(
         tokenDirectory: paths.userDir,
         tokenFileName,
         credentialsKey: 'installed',
+        includeOfflineAccess: true,
         signal: abortController?.signal
     });
 

@@ -263,7 +263,7 @@ Commands:
   resched                       Reschedule event
   snooze                        Snooze event (default: +1d)
   import                        Import events from ICS file
-  calendars                     List available calendars
+  calendars | listc | list-calendars   List available calendars
   assoc                         Set up .ics file association (Windows)
   help [command]                Show help
 
@@ -358,7 +358,7 @@ const USAGE: Record<string, string> = {
        gcal <file.ics>                          (via file association)
   Import events from an iCalendar file.
 `,
-    calendars: `gcal calendars
+    calendars: `gcal calendars   (aliases: listc, list-calendars)
   List available calendars (id, name, access role).
 `,
     assoc: `gcal assoc
@@ -369,7 +369,13 @@ const USAGE: Record<string, string> = {
 `
 };
 
+const HELP_ALIASES: Record<string, string> = {
+    'listc': 'calendars',
+    'list-calendars': 'calendars'
+};
+
 function showUsage(cmd?: string): void {
+    if (cmd) cmd = HELP_ALIASES[cmd] || cmd;
     if (cmd && USAGE[cmd]) {
         console.log(USAGE[cmd]);
         return;
@@ -935,7 +941,9 @@ async function main(): Promise<void> {
             break;
         }
 
-        case 'calendars': {
+        case 'calendars':
+        case 'listc':
+        case 'list-calendars': {
             const token = await getAccessToken(user, false);
             const calendars = await listCalendars(token);
 
