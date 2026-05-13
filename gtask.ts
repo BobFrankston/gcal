@@ -8,7 +8,7 @@ import { createInterface } from 'readline/promises';
 import {
     loadConfig, saveConfig, parseDateTime, formatYMD, normalizeUser
 } from './glib/gutils.js';
-import { setupAbortHandler, getAccessToken } from './glib/goauth.js';
+import { setupAbortHandler, teardownAbortHandler, getAccessToken } from './glib/goauth.js';
 import {
     listTaskLists, listTasks, createTask, patchTask, deleteTask,
     moveTask, clearCompleted, resolveTaskList
@@ -542,9 +542,12 @@ async function main(): Promise<void> {
 
 if (import.meta.main) {
     main()
-        .then(() => process.exit(0))
-        .catch(e => {
+        .then(async () => {
+            await teardownAbortHandler();
+        })
+        .catch(async e => {
+            await teardownAbortHandler();
             console.error(`Error: ${e.message}`);
-            process.exit(1);
+            process.exitCode = 1;
         });
 }

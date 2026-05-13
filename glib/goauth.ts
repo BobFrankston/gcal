@@ -19,11 +19,12 @@ export const SCOPE_WRITE =
     + 'https://www.googleapis.com/auth/tasks';
 
 let abortController: AbortController | null = null;
+let sigintListener: (() => void) | null = null;
 
 export function setupAbortHandler(): AbortController {
     abortController = new AbortController();
     let ctrlCCount = 0;
-    process.on('SIGINT', () => {
+    sigintListener = () => {
         ctrlCCount++;
         abortController?.abort();
         if (ctrlCCount >= 2) {
@@ -31,8 +32,26 @@ export function setupAbortHandler(): AbortController {
             process.exit(1);
         }
         console.log('\n\nCtrl+C pressed - aborting... (press again to force exit)');
-    });
+    };
+    process.on('SIGINT', sigintListener);
     return abortController;
+}
+
+// Clean shutdown for Node 25 on Windows: remove the SIGINT listener AND
+// destroy undici's keep-alive sockets so libuv doesn't trip the
+// UV_HANDLE_CLOSING assertion in src\win\async.c during process.exit.
+export async function teardownAbortHandler(): Promise<void> {
+    if (sigintListener) {
+        process.off('SIGINT', sigintListener);
+        sigintListener = null;
+    }
+    abortController = null;
+    try {
+        const undici = await import('undici' as string) as any;
+        await undici.getGlobalDispatcher().close();
+    } catch {
+        // undici not present or already closed — ignore
+    }
 }
 
 export function getAbortController(): AbortController | null {

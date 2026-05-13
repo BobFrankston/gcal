@@ -18,7 +18,7 @@ import {
     formatDateTime, formatDuration, parseDuration, parseDateTime,
     hasTimeComponent, parseAllDay, formatYMD, normalizeUser
 } from './glib/gutils.js';
-import { setupAbortHandler, getAccessToken, apiFetch } from './glib/goauth.js';
+import { setupAbortHandler, teardownAbortHandler, getAccessToken, apiFetch } from './glib/goauth.js';
 import { extractEventsFromText, readClipboard } from './glib/aihelper.js';
 
 import pkg from './package.json' with { type: 'json' };
@@ -57,6 +57,38 @@ async function listEvents(
     }
     const data = await res.json() as EventsListResponse;
     return data.items || [];
+}
+
+async function listRecurringEvents(
+    accessToken: string,
+    calendarId = 'primary',
+    maxResults = 250
+): Promise<GoogleEvent[]> {
+    // singleEvents=false returns the master records; orderBy=startTime is incompatible
+    // so we omit it and sort client-side. Pages until done or maxResults reached.
+    const out: GoogleEvent[] = [];
+    let pageToken: string | undefined;
+    do {
+        const params = new URLSearchParams({
+            maxResults: '250',
+            singleEvents: 'false'
+        });
+        if (pageToken) params.set('pageToken', pageToken);
+        const url = `${CALENDAR_API_BASE}/calendars/${encodeURIComponent(calendarId)}/events?${params}`;
+        const res = await apiFetch(url, accessToken);
+        if (!res.ok) {
+            throw new Error(`Failed to list events: ${res.status} ${res.statusText}`);
+        }
+        const data = await res.json() as EventsListResponse & { nextPageToken?: string };
+        for (const ev of data.items || []) {
+            if (ev.recurrence && ev.status !== 'cancelled') {
+                out.push(ev);
+                if (out.length >= maxResults) return out;
+            }
+        }
+        pageToken = data.nextPageToken;
+    } while (pageToken);
+    return out;
 }
 
 async function createEvent(
@@ -264,6 +296,7 @@ Commands:
   snooze                        Snooze event (default: +1d)
   import                        Import events from ICS file
   calendars | listc | list-calendars   List available calendars
+  listr | list-recurring        List recurring event masters (RRULE)
   assoc                         Set up .ics file association (Windows)
   help [command]                Show help
 
@@ -361,6 +394,12 @@ const USAGE: Record<string, string> = {
     calendars: `gcal calendars   (aliases: listc, list-calendars)
   List available calendars (id, name, access role).
 `,
+    listr: `gcal listr   (alias: list-recurring)
+  List recurring event masters in the current calendar, showing the
+  RRULE for each. Use this to confirm whether something like a daily
+  "Statin" reminder actually exists as a recurring event in Google
+  Calendar (vs. being defined only in another tool's local store).
+`,
     assoc: `gcal assoc
   Set up Windows .ics file association so double-clicking imports to gcal.
 `,
@@ -371,7 +410,8 @@ const USAGE: Record<string, string> = {
 
 const HELP_ALIASES: Record<string, string> = {
     'listc': 'calendars',
-    'list-calendars': 'calendars'
+    'list-calendars': 'calendars',
+    'list-recurring': 'listr'
 };
 
 function showUsage(cmd?: string): void {
@@ -400,6 +440,7 @@ interface ParsedArgs {
     all: boolean;
     json: boolean;
     reminders: number[];
+    rrule: string;    /** RRULE body, e.g. "FREQ=DAILY". RRULE: prefix added automatically. */
     since?: Date;
     till?: Date;
     helpCmd: string;  /** `gcal help <cmd>` */
@@ -420,6 +461,7 @@ function parseArgs(argv: string[]): ParsedArgs {
         all: false,
         json: false,
         reminders: [],
+        rrule: '',
         helpCmd: ''
     };
 
@@ -470,6 +512,14 @@ function parseArgs(argv: string[]): ParsedArgs {
                 const val = argv[++i] || '';
                 const mins = parseDuration(val);
                 result.reminders.push(mins);
+                break;
+            }
+            case '-rule':
+            case '-rrule':
+            case '--rrule': {
+                let v = argv[++i] || '';
+                if (v.toUpperCase().startsWith('RRULE:')) v = v.slice(6);
+                result.rrule = v;
                 break;
             }
             case '-since':
@@ -677,6 +727,30 @@ async function main(): Promise<void> {
         process.exit(1);
     }
 
+    // Resolve partial calendar names against the user's calendar list.
+    // 'primary' and full IDs (containing '@') pass through unchanged.
+    if (parsed.calendar !== 'primary' && !parsed.calendar.includes('@')) {
+        const token = await getAccessToken(user, false);
+        const cals = await listCalendars(token);
+        const q = parsed.calendar.toLowerCase();
+        const exact = cals.filter(c => (c.summary || '').toLowerCase() === q);
+        const matches = exact.length > 0 ? exact : cals.filter(c =>
+            (c.summary || '').toLowerCase().includes(q) ||
+            (c.id || '').toLowerCase().includes(q)
+        );
+        if (matches.length === 0) {
+            console.error(`No calendar matches "${parsed.calendar}". Available:`);
+            for (const c of cals) console.error(`  ${c.summary} -- ${c.id}`);
+            process.exit(1);
+        }
+        if (matches.length > 1) {
+            console.error(`Ambiguous calendar "${parsed.calendar}":`);
+            for (const c of matches) console.error(`  ${c.summary} -- ${c.id}`);
+            process.exit(1);
+        }
+        parsed.calendar = matches[0].id!;
+    }
+
     switch (parsed.command) {
         case 'import': {
             const filePath = parsed.icsFile || parsed.args[0];
@@ -717,7 +791,21 @@ async function main(): Promise<void> {
             const token = await getAccessToken(user, false);
             const timeMin = parsed.since ? parsed.since.toISOString() : undefined;
             const timeMax = parsed.till ? parsed.till.toISOString() : undefined;
-            let events = await listEvents(token, parsed.calendar, count, timeMin, timeMax);
+            // Oversample when collapsing recurring series so we still get
+            // <count> distinct items after dedup.
+            const fetchCount = parsed.all ? count : Math.max(count * 5, 50);
+            let events = await listEvents(token, parsed.calendar, fetchCount, timeMin, timeMax);
+            if (!parsed.all) {
+                const seen = new Set<string>();
+                events = events.filter(e => {
+                    const seriesKey = e.recurringEventId;
+                    if (!seriesKey) return true;
+                    if (seen.has(seriesKey)) return false;
+                    seen.add(seriesKey);
+                    return true;
+                });
+                events = events.slice(0, count);
+            }
             const birthdayCount = events.filter(e => e.eventType === 'birthday').length;
             if (!parsed.birthdays) {
                 events = events.filter(e => e.eventType !== 'birthday');
@@ -737,7 +825,9 @@ async function main(): Promise<void> {
                     const shortId = (event.id || '').slice(0, 8);
                     const start = event.start ? formatDateTime(event.start) : '?';
                     const duration = (event.start && event.end) ? formatDuration(event.start, event.end) : '';
-                    const summary = (event.summary || '(no title)') + (event.eventType === 'birthday' ? ' [from contact]' : '');
+                    const summary = (event.summary || '(no title)')
+                        + (event.eventType === 'birthday' ? ' [from contact]' : '')
+                        + (event.recurringEventId ? ' [recurring]' : '');
                     const loc = event.location || '';
                     if (parsed.verbose) {
                         rows.push([shortId, start, duration, summary, loc, event.htmlLink || '']);
@@ -790,6 +880,7 @@ async function main(): Promise<void> {
                     },
                     reminders: buildReminders(parsed.reminders)
                 };
+                if (parsed.rrule) event.recurrence = [`RRULE:${parsed.rrule}`];
 
                 const token = await getAccessToken(user, true);
                 await checkProximity(token, parsed.calendar, startTime, endTime);
@@ -877,13 +968,17 @@ async function main(): Promise<void> {
                 ? '\nCreate this event? [Y/n] (auto-yes in 60s) '
                 : `\nCreate ${events.length} events? [Y/n] (auto-yes in 60s) `;
             const rl2 = createInterface({ input: process.stdin, output: process.stdout });
+            let timeoutId: NodeJS.Timeout | undefined;
             const confirm = await Promise.race([
                 rl2.question(prompt).then(s => s.trim().toLowerCase()),
-                new Promise<string>(resolve => setTimeout(() => {
-                    console.log('\nNo response — creating event(s).');
-                    resolve('');
-                }, 60_000))
+                new Promise<string>(resolve => {
+                    timeoutId = setTimeout(() => {
+                        console.log('\nNo response — creating event(s).');
+                        resolve('');
+                    }, 60_000);
+                })
             ]);
+            if (timeoutId) clearTimeout(timeoutId);
             rl2.close();
             if (confirm && confirm !== 'y' && confirm !== 'yes') {
                 console.log('Cancelled.');
@@ -953,6 +1048,38 @@ async function main(): Promise<void> {
                 const role = cal.accessRole ? ` [${cal.accessRole}]` : '';
                 console.log(`  ${cal.summary || cal.id}${primary}${role}`);
                 console.log(`    ID: ${cal.id}`);
+            }
+            break;
+        }
+
+        case 'listr':
+        case 'list-recurring': {
+            const token = await getAccessToken(user, false);
+            const events = await listRecurringEvents(token, parsed.calendar, parsed.count || 250);
+
+            if (events.length === 0) {
+                console.log('No recurring events found.');
+                break;
+            }
+            console.log(`\nRecurring events (${events.length}):\n`);
+            const rows: string[][] = [];
+            for (const ev of events) {
+                const shortId = (ev.id || '').slice(0, 8);
+                const start = ev.start ? formatDateTime(ev.start) : '';
+                const summary = ev.summary || '(no title)';
+                const rule = (ev.recurrence || []).join('; ');
+                rows.push([shortId, start, summary, rule]);
+            }
+            const headers = ['ID', 'Starts', 'Event', 'Recurrence'];
+            const colWidths = headers.map((h, i) =>
+                Math.max(h.length, ...rows.map(r => (r[i] || '').length))
+            );
+            const lastIdx = headers.length - 1;
+            const padCell = (s: string, i: number) => i === lastIdx ? s : s.padEnd(colWidths[i]);
+            console.log(headers.map(padCell).join('  '));
+            console.log(colWidths.map(w => '-'.repeat(w)).join('  '));
+            for (const row of rows) {
+                console.log(row.map((cell, i) => padCell(cell || '', i)).join('  '));
             }
             break;
         }
@@ -1281,9 +1408,15 @@ async function main(): Promise<void> {
 
 if (import.meta.main) {
     main()
-        .then(() => process.exit(0))
-        .catch(e => {
+        .then(async () => {
+            await teardownAbortHandler();
+            // Don't call process.exit explicitly — Node 25 on Windows asserts
+            // in libuv (UV_HANDLE_CLOSING) when process.exit races with handle
+            // teardown. Let the event loop drain naturally instead.
+        })
+        .catch(async e => {
+            await teardownAbortHandler();
             console.error(`Error: ${e.message}`);
-            process.exit(1);
+            process.exitCode = 1;
         });
 }

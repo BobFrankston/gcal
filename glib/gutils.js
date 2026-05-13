@@ -161,6 +161,8 @@ export function formatDuration(start, end) {
     const startMs = new Date(start.dateTime).getTime();
     const endMs = new Date(end.dateTime).getTime();
     const mins = (endMs - startMs) / 60000;
+    if (mins === 0)
+        return '';
     if (mins < 60) {
         return `${mins} min`;
     }
