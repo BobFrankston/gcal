@@ -12,7 +12,7 @@ import fs from 'fs';
 import path from 'path';
 import { execSync } from 'child_process';
 import { createInterface } from 'readline/promises';
-import type { GoogleEvent, EventsListResponse, CalendarListEntry, CalendarListResponse } from './glib/types.ts';
+import type { GoogleEvent, EventDateTime, EventsListResponse, CalendarListEntry, CalendarListResponse } from './glib/types.ts';
 import {
     loadConfig, saveConfig,
     formatDateTime, formatDuration, parseDuration, parseDateTime,
@@ -290,6 +290,7 @@ Commands:
   show                          Show full details for an event (-json for JSON)
   open                          Open event in browser
   add                           Add event (explicit, AI, or interactive)
+  update | edit | set           Change an event's time/title/location/busy/...
   del | delete                  Delete event(s) by ID
   remind                        Add reminder(s) to existing event
   resched                       Reschedule event
@@ -338,20 +339,55 @@ const USAGE: Record<string, string> = {
   Examples:
     gcal open abc12345
 `,
-    add: `gcal add <title> <when> [duration]      Explicit
+    add: `gcal add <title> <when> [duration]      Explicit (timed)
+       gcal add <title> <date> [days] -allday  Explicit (all-day)
        gcal add "<free text>"                  AI-parsed single arg
        gcal add -clip                          AI-parsed from clipboard
        gcal add                                Interactive (type description)
   Add a calendar event. Default duration 1h. Use -r <dur> to add reminder(s).
+
+  -allday         Create an all-day event. The third arg is a day count
+                  (default 1); the event spans that many days.
+  -free           Mark the event as Free (does not block time / not busy).
+  -busy           Mark the event as Busy (the default).
+  -open           Open the event in the browser after creating it.
 
   Examples:
     gcal add "Dentist" "Friday 3pm" "1h"
     gcal add "Lunch" "1/14/2026 12:00" "1h"
     gcal add "Meeting" "tomorrow 10:00"
     gcal add "Appointment" "jan 15 2pm"
+    gcal add "Vacation" "jul 1" -allday              (1 day, all-day)
+    gcal add "Conference" "jul 1" 3 -allday          (3-day all-day event)
+    gcal add "Out of office" "jul 1" -allday -free   (all-day, not busy)
     gcal add "Dentist appointment Friday 3pm for 1 hour"
     gcal add -clip
     gcal add "Dentist" "Friday 3pm" -r 30m
+`,
+    update: `gcal update <id> [options]
+       gcal edit <id> ...                      (aliases: edit, set)
+  Change settings on an existing event. Only the options you give are
+  changed. Searches up to 30 days back; widen with -since.
+
+  -when <when>    New start time/date (accepts +Nd / +Nh advances too).
+  -dur <dur>      New duration ("1h30m"); for all-day events, a day count.
+  -title <text>   New event title.
+  -loc <text>     New location ("" to clear).
+  -note <text>    New description ("" to clear).
+  -free           Mark as Free (not busy).
+  -busy           Mark as Busy.
+  -r <dur>        Add a popup reminder (repeatable).
+  -rx <dur>       Remove a reminder matching that duration (repeatable).
+  -nr             Remove all reminders.
+  -open           Open the event in the browser afterward.
+
+  Examples:
+    gcal update abc12345 -free
+    gcal update abc12345 -busy -title "Team sync"
+    gcal update abc12345 -when "wed 2pm" -dur 90m
+    gcal update abc12345 -r 30m -r 1h          (add two reminders)
+    gcal update abc12345 -rx 30m               (remove the 30m reminder)
+    gcal update abc12345 -nr                   (clear all reminders)
 `,
     del: `gcal del <id> [id2...] [-all] [-b]
        gcal delete <id> [id2...]
@@ -411,7 +447,9 @@ const USAGE: Record<string, string> = {
 const HELP_ALIASES: Record<string, string> = {
     'listc': 'calendars',
     'list-calendars': 'calendars',
-    'list-recurring': 'listr'
+    'list-recurring': 'listr',
+    'set': 'update',
+    'edit': 'update'
 };
 
 function showUsage(cmd?: string): void {
@@ -439,6 +477,16 @@ interface ParsedArgs {
     clip: boolean;
     all: boolean;
     json: boolean;
+    allDay: boolean;
+    transparency: string;  /** 'opaque' (busy) | 'transparent' (free); '' = unset */
+    setTitle?: string;     /** update: new summary (undefined = leave alone) */
+    setLoc?: string;       /** update: new location */
+    setNote?: string;      /** update: new description */
+    setWhen?: string;      /** update: new start (date/time or +Nd advance) */
+    setDur?: string;       /** update: new duration (timed) or day count (all-day) */
+    removeReminders: number[];  /** update: reminder minutes to drop */
+    clearReminders: boolean;    /** update: drop all reminders */
+    open: boolean;         /** open the event in the browser after add/update */
     reminders: number[];
     rrule: string;    /** RRULE body, e.g. "FREQ=DAILY". RRULE: prefix added automatically. */
     since?: Date;
@@ -460,6 +508,11 @@ function parseArgs(argv: string[]): ParsedArgs {
         clip: false,
         all: false,
         json: false,
+        allDay: false,
+        transparency: '',
+        removeReminders: [],
+        clearReminders: false,
+        open: false,
         reminders: [],
         rrule: '',
         helpCmd: ''
@@ -505,6 +558,57 @@ function parseArgs(argv: string[]): ParsedArgs {
             case '-json':
             case '--json':
                 result.json = true;
+                break;
+            case '-allday':
+            case '-all-day':
+            case '--allday':
+                result.allDay = true;
+                break;
+            case '-free':
+            case '--free':
+                result.transparency = 'transparent';
+                break;
+            case '-busy':
+            case '--busy':
+                result.transparency = 'opaque';
+                break;
+            case '-title':
+            case '--title':
+                result.setTitle = argv[++i] || '';
+                break;
+            case '-loc':
+            case '-location':
+            case '--location':
+                result.setLoc = argv[++i] || '';
+                break;
+            case '-note':
+            case '-desc':
+            case '-description':
+            case '--note':
+                result.setNote = argv[++i] || '';
+                break;
+            case '-when':
+            case '--when':
+                result.setWhen = argv[++i] || '';
+                break;
+            case '-dur':
+            case '-duration':
+            case '--duration':
+                result.setDur = argv[++i] || '';
+                break;
+            case '-rx':
+            case '-rmr':
+            case '--remove-reminder':
+                result.removeReminders.push(parseDuration(argv[++i] || ''));
+                break;
+            case '-nr':
+            case '-noreminders':
+            case '--no-reminders':
+                result.clearReminders = true;
+                break;
+            case '-open':
+            case '--open':
+                result.open = true;
                 break;
             case '-r':
             case '-reminder':
@@ -590,6 +694,102 @@ function buildReminders(minutes: number[]): GoogleEvent['reminders'] | undefined
         useDefault: false,
         overrides: minutes.map(m => ({ method: 'popup' as const, minutes: m }))
     };
+}
+
+/** Compute a start/end patch for moving and/or resizing an event.
+ *  whenArg undefined => keep original start; durationArg undefined => keep original length.
+ *  For all-day events durationArg is a day count; for timed events a duration string. */
+function reschedulePatch(
+    event: GoogleEvent,
+    whenArg: string | undefined,
+    durationArg: string | undefined
+): { patch: Partial<GoogleEvent>; startDisplay: EventDateTime; endDisplay: EventDateTime } {
+    const origIsAllDay = !!event.start?.date;
+
+    if (origIsAllDay) {
+        const origStart = parseAllDay(event.start!.date!);
+        const origEnd = parseAllDay(event.end!.date!);
+        const origDurDays = Math.max(1, Math.round((origEnd.getTime() - origStart.getTime()) / 86400_000));
+
+        let newStart: Date;
+        if (whenArg) {
+            const adv = whenArg.match(/^\+(\d+)([dw])$/i);
+            if (adv) {
+                const [, n, unit] = adv;
+                const amt = parseInt(n);
+                newStart = new Date(origStart);
+                newStart.setDate(newStart.getDate() + (unit.toLowerCase() === 'w' ? amt * 7 : amt));
+            } else {
+                newStart = parseDateTime(whenArg);
+                newStart.setHours(0, 0, 0, 0);
+            }
+        } else {
+            newStart = new Date(origStart);
+        }
+        const durDays = durationArg ? (parseInt(durationArg, 10) || origDurDays) : origDurDays;
+        const newEnd = new Date(newStart);
+        newEnd.setDate(newEnd.getDate() + durDays);
+
+        const patch = { start: { date: formatYMD(newStart) }, end: { date: formatYMD(newEnd) } };
+        return { patch, startDisplay: patch.start, endDisplay: patch.end };
+    }
+
+    const origStart = new Date(event.start!.dateTime!);
+    const origEnd = new Date(event.end!.dateTime!);
+    const origDurMs = origEnd.getTime() - origStart.getTime();
+
+    let newStart: Date;
+    if (whenArg) {
+        const adv = whenArg.match(/^\+(\d+)([dwhm])$/i);
+        if (adv) {
+            const [, n, unit] = adv;
+            const amt = parseInt(n);
+            newStart = new Date(origStart);
+            switch (unit.toLowerCase()) {
+                case 'd': newStart.setDate(newStart.getDate() + amt); break;
+                case 'w': newStart.setDate(newStart.getDate() + amt * 7); break;
+                case 'h': newStart.setHours(newStart.getHours() + amt); break;
+                case 'm': newStart.setMinutes(newStart.getMinutes() + amt); break;
+            }
+        } else {
+            newStart = parseDateTime(whenArg);
+            if (!hasTimeComponent(whenArg)) {
+                newStart.setHours(origStart.getHours(), origStart.getMinutes(), 0, 0);
+            }
+        }
+    } else {
+        newStart = new Date(origStart);
+    }
+    const durMs = durationArg ? parseDuration(durationArg) * 60_000 : origDurMs;
+    const newEnd = new Date(newStart.getTime() + durMs);
+
+    const tz = event.start!.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const patch = {
+        start: { dateTime: newStart.toISOString(), timeZone: tz },
+        end: { dateTime: newEnd.toISOString(), timeZone: tz }
+    };
+    return { patch, startDisplay: patch.start, endDisplay: patch.end };
+}
+
+/** Format a reminder override list for display, e.g. "10m, 1h" or "(none)". */
+function formatReminders(overrides?: { minutes?: number }[]): string {
+    if (!overrides || overrides.length === 0) return '(none)';
+    return overrides
+        .map(r => r.minutes ?? 0)
+        .sort((a, b) => a - b)
+        .map(m => (m >= 60 && m % 60 === 0 ? `${m / 60}h` : `${m}m`))
+        .join(', ');
+}
+
+/** Open a URL in the platform's default browser. */
+function openUrl(url: string): void {
+    if (process.platform === 'win32') {
+        execSync(`start "" "${url}"`, { stdio: 'ignore', shell: 'cmd.exe' });
+    } else if (process.platform === 'darwin') {
+        execSync(`open "${url}"`, { stdio: 'ignore' });
+    } else {
+        execSync(`xdg-open "${url}"`, { stdio: 'ignore' });
+    }
 }
 
 /** Match events by ID prefix and dedup recurring instances to the earliest.
@@ -863,33 +1063,49 @@ async function main(): Promise<void> {
         case 'add': {
             // Explicit mode: gcal add "title" "when" [duration]
             if (parsed.args.length >= 2 && !parsed.clip) {
-                const [title, when, duration = '1h'] = parsed.args;
+                const [title, when, third] = parsed.args;
                 const startTime = parseDateTime(when);
-                const durationMins = parseDuration(duration);
-                const endTime = new Date(startTime.getTime() + durationMins * 60 * 1000);
 
                 const event: GoogleEvent = {
                     summary: title,
-                    start: {
-                        dateTime: startTime.toISOString(),
-                        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
-                    },
-                    end: {
-                        dateTime: endTime.toISOString(),
-                        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
-                    },
+                    start: {},
+                    end: {},
                     reminders: buildReminders(parsed.reminders)
                 };
+
+                if (parsed.allDay) {
+                    // All-day: [duration] is a day count (default 1). Google's
+                    // end.date is exclusive, so a 1-day event ends the next day.
+                    const days = third ? (parseInt(third, 10) || 1) : 1;
+                    const startD = new Date(startTime);
+                    startD.setHours(0, 0, 0, 0);
+                    const endD = new Date(startD);
+                    endD.setDate(endD.getDate() + days);
+                    event.start = { date: formatYMD(startD) };
+                    event.end = { date: formatYMD(endD) };
+                } else {
+                    const durationMins = parseDuration(third || '1h');
+                    const endTime = new Date(startTime.getTime() + durationMins * 60 * 1000);
+                    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+                    event.start = { dateTime: startTime.toISOString(), timeZone: tz };
+                    event.end = { dateTime: endTime.toISOString(), timeZone: tz };
+                }
+                if (parsed.transparency) event.transparency = parsed.transparency;
                 if (parsed.rrule) event.recurrence = [`RRULE:${parsed.rrule}`];
 
                 const token = await getAccessToken(user, true);
-                await checkProximity(token, parsed.calendar, startTime, endTime);
+                if (!parsed.allDay) {
+                    await checkProximity(token, parsed.calendar,
+                        new Date(event.start.dateTime!), new Date(event.end.dateTime!));
+                }
                 const created = await createEvent(token, event, parsed.calendar);
                 console.log(`\nEvent created: ${created.summary}`);
                 console.log(`  When: ${formatDateTime(created.start)} - ${formatDateTime(created.end)}`);
+                if (created.transparency === 'transparent') console.log(`  Free (not busy)`);
                 if (created.htmlLink) {
                     console.log(`  Link: ${created.htmlLink}`);
                 }
+                if (parsed.open && created.htmlLink) openUrl(created.htmlLink);
                 break;
             }
 
@@ -949,6 +1165,7 @@ async function main(): Promise<void> {
                     description: extracted.description,
                     reminders: buildReminders(parsed.reminders)
                 };
+                if (parsed.transparency) event.transparency = parsed.transparency;
                 events.push(event);
 
                 console.log(`\n  Event: ${extracted.summary}`);
@@ -992,6 +1209,7 @@ async function main(): Promise<void> {
                 if (created.htmlLink) {
                     console.log(`  Link: ${created.htmlLink}`);
                 }
+                if (parsed.open && created.htmlLink) openUrl(created.htmlLink);
             }
             break;
         }
@@ -1128,6 +1346,111 @@ async function main(): Promise<void> {
             break;
         }
 
+        case 'update':
+        case 'edit':
+        case 'set': {
+            if (parsed.args.length < 1) {
+                console.error('Usage: gcal update <id> [-when <when>] [-dur <dur>] [-title <text>]');
+                console.error('                       [-loc <text>] [-note <text>] [-free|-busy]');
+                console.error('                       [-r <dur>] [-rx <dur>] [-nr] [-open]');
+                console.error('Use "gcal list" to see event IDs');
+                process.exit(1);
+            }
+
+            const patch: Partial<GoogleEvent> = {};
+            if (parsed.setTitle !== undefined) patch.summary = parsed.setTitle;
+            if (parsed.setLoc !== undefined) patch.location = parsed.setLoc;
+            if (parsed.setNote !== undefined) patch.description = parsed.setNote;
+            if (parsed.transparency) patch.transparency = parsed.transparency;
+
+            const changingTime = parsed.setWhen !== undefined || parsed.setDur !== undefined;
+            const changingReminders = parsed.clearReminders
+                || parsed.reminders.length > 0 || parsed.removeReminders.length > 0;
+
+            if (Object.keys(patch).length === 0 && !changingTime && !changingReminders) {
+                console.error('Nothing to change. Specify -when, -dur, -title, -loc, -note,');
+                console.error('  -free, -busy, -r (add reminder), -rx (remove reminder), or -nr.');
+                process.exit(1);
+            }
+
+            const idPrefix = parsed.args[0];
+            const lookback = parsed.since
+                ? parsed.since.toISOString()
+                : new Date(Date.now() - 30 * 86400_000).toISOString();
+            const timeMax = parsed.till ? parsed.till.toISOString() : undefined;
+
+            const token = await getAccessToken(user, true);
+            const events = await listEvents(token, parsed.calendar, 250, lookback, timeMax);
+            const unique = findByPrefix(events, idPrefix, parsed.birthdays);
+
+            if (unique.length === 0) {
+                console.error(`${idPrefix}: not found (searched from ${lookback.slice(0, 10)})`);
+                process.exit(1);
+            }
+            if (unique.length > 1) {
+                console.error(`${idPrefix}: ambiguous (${unique.length} matches)`);
+                for (const e of unique) {
+                    console.error(`  ${e.id?.slice(0, 8)} - ${e.summary}`);
+                }
+                process.exit(1);
+            }
+
+            const event = unique[0];
+
+            // Time / duration change (reuses the resched logic)
+            let timeFrom = '';
+            let timeTo = '';
+            if (changingTime) {
+                const r = reschedulePatch(event, parsed.setWhen, parsed.setDur);
+                patch.start = r.patch.start;
+                patch.end = r.patch.end;
+                timeFrom = `${formatDateTime(event.start!)} - ${formatDateTime(event.end!)}`;
+                timeTo = `${formatDateTime(r.startDisplay)} - ${formatDateTime(r.endDisplay)}`;
+            }
+
+            // Reminders: -nr clears all; otherwise merge existing with -r adds and -rx removes
+            if (parsed.clearReminders) {
+                patch.reminders = { useDefault: false, overrides: [] };
+            } else if (changingReminders) {
+                const mins = new Set<number>((event.reminders?.overrides ?? []).map(r => r.minutes ?? 0));
+                for (const m of parsed.removeReminders) mins.delete(m);
+                for (const m of parsed.reminders) mins.add(m);
+                patch.reminders = {
+                    useDefault: false,
+                    overrides: [...mins].sort((a, b) => a - b).map(m => ({ method: 'popup' as const, minutes: m }))
+                };
+            }
+
+            // Proximity check when the timed slot moved
+            if (patch.start?.dateTime && patch.end?.dateTime) {
+                await checkProximity(
+                    token,
+                    parsed.calendar,
+                    new Date(patch.start.dateTime),
+                    new Date(patch.end.dateTime),
+                    (event.id || '').split('_')[0]
+                );
+            }
+
+            const updated = await patchEvent(token, event.id!, patch, parsed.calendar);
+            console.log(`Updated: ${updated.summary}`);
+            if (patch.summary !== undefined) console.log(`  Title:     ${updated.summary}`);
+            if (changingTime) {
+                console.log(`  When:      ${timeFrom}`);
+                console.log(`          -> ${timeTo}`);
+            }
+            if (patch.location !== undefined) console.log(`  Where:     ${updated.location || '(cleared)'}`);
+            if (patch.description !== undefined) console.log(`  Note:      ${updated.description || '(cleared)'}`);
+            if (patch.transparency !== undefined) {
+                console.log(`  Shows as:  ${updated.transparency === 'transparent' ? 'free' : 'busy'}`);
+            }
+            if (patch.reminders !== undefined) {
+                console.log(`  Reminders: ${formatReminders(updated.reminders?.overrides)}`);
+            }
+            if (parsed.open && updated.htmlLink) openUrl(updated.htmlLink);
+            break;
+        }
+
         case 'resched':
         case 'reschedule':
         case 'snooze': {
@@ -1177,73 +1500,10 @@ async function main(): Promise<void> {
                 }
             }
 
-            const origIsAllDay = !!event.start?.date;
-            let patch: Partial<GoogleEvent>;
-            let newStartDisplay: { date?: string; dateTime?: string; timeZone?: string };
-            let newEndDisplay: { date?: string; dateTime?: string; timeZone?: string };
-
-            if (origIsAllDay) {
-                const origStart = parseAllDay(event.start!.date!);
-                const origEnd = parseAllDay(event.end!.date!);
-                const origDurDays = Math.max(1, Math.round((origEnd.getTime() - origStart.getTime()) / 86400_000));
-
-                let newStart: Date;
-                const adv = whenArg.match(/^\+(\d+)([dw])$/i);
-                if (adv) {
-                    const [, n, unit] = adv;
-                    const amt = parseInt(n);
-                    newStart = new Date(origStart);
-                    newStart.setDate(newStart.getDate() + (unit.toLowerCase() === 'w' ? amt * 7 : amt));
-                } else {
-                    newStart = parseDateTime(whenArg);
-                    newStart.setHours(0, 0, 0, 0);
-                }
-                const newEnd = new Date(newStart);
-                newEnd.setDate(newEnd.getDate() + origDurDays);
-
-                patch = {
-                    start: { date: formatYMD(newStart) },
-                    end: { date: formatYMD(newEnd) }
-                };
-                newStartDisplay = { date: formatYMD(newStart) };
-                newEndDisplay = { date: formatYMD(newEnd) };
-            } else {
-                const origStart = new Date(event.start!.dateTime!);
-                const origEnd = new Date(event.end!.dateTime!);
-                const origDurMs = origEnd.getTime() - origStart.getTime();
-
-                let newStart: Date;
-                const adv = whenArg.match(/^\+(\d+)([dwhm])$/i);
-                if (adv) {
-                    const [, n, unit] = adv;
-                    const amt = parseInt(n);
-                    newStart = new Date(origStart);
-                    switch (unit.toLowerCase()) {
-                        case 'd': newStart.setDate(newStart.getDate() + amt); break;
-                        case 'w': newStart.setDate(newStart.getDate() + amt * 7); break;
-                        case 'h': newStart.setHours(newStart.getHours() + amt); break;
-                        case 'm': newStart.setMinutes(newStart.getMinutes() + amt); break;
-                    }
-                } else {
-                    newStart = parseDateTime(whenArg);
-                    if (!hasTimeComponent(whenArg)) {
-                        newStart.setHours(origStart.getHours(), origStart.getMinutes(), 0, 0);
-                    }
-                }
-                const durMs = durationArg ? parseDuration(durationArg) * 60_000 : origDurMs;
-                const newEnd = new Date(newStart.getTime() + durMs);
-
-                const tz = event.start!.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone;
-                patch = {
-                    start: { dateTime: newStart.toISOString(), timeZone: tz },
-                    end: { dateTime: newEnd.toISOString(), timeZone: tz }
-                };
-                newStartDisplay = patch.start!;
-                newEndDisplay = patch.end!;
-            }
+            const { patch, startDisplay, endDisplay } = reschedulePatch(event, whenArg, durationArg);
 
             // Proximity check for timed events (skip all-day)
-            if (!origIsAllDay && patch.start?.dateTime && patch.end?.dateTime) {
+            if (patch.start?.dateTime && patch.end?.dateTime) {
                 await checkProximity(
                     token,
                     parsed.calendar,
@@ -1256,7 +1516,8 @@ async function main(): Promise<void> {
             const updated = await patchEvent(token, event.id!, patch, parsed.calendar);
             console.log(`Rescheduled: ${updated.summary}`);
             console.log(`  From: ${formatDateTime(event.start!)} - ${formatDateTime(event.end!)}`);
-            console.log(`  To:   ${formatDateTime(newStartDisplay)} - ${formatDateTime(newEndDisplay)}`);
+            console.log(`  To:   ${formatDateTime(startDisplay)} - ${formatDateTime(endDisplay)}`);
+            if (parsed.open && updated.htmlLink) openUrl(updated.htmlLink);
             break;
         }
 
@@ -1344,6 +1605,7 @@ async function main(): Promise<void> {
             if (event.hangoutLink) console.log(`  Meet:      ${event.hangoutLink}`);
             if (event.htmlLink) console.log(`  Link:      ${event.htmlLink}`);
             console.log(`  Status:    ${event.status || 'confirmed'}`);
+            console.log(`  Shows as:  ${event.transparency === 'transparent' ? 'free' : 'busy'}`);
             if (event.created) console.log(`  Created:   ${formatDateTime({ dateTime: event.created })}`);
             if (event.updated) console.log(`  Updated:   ${formatDateTime({ dateTime: event.updated })}`);
             console.log(`  ID:        ${event.id}`);
@@ -1389,13 +1651,7 @@ async function main(): Promise<void> {
             console.log(`Opening: ${event.summary || '(no title)'}`);
             console.log(`  ${event.htmlLink}`);
 
-            if (process.platform === 'win32') {
-                execSync(`start "" "${event.htmlLink}"`, { stdio: 'ignore', shell: 'cmd.exe' });
-            } else if (process.platform === 'darwin') {
-                execSync(`open "${event.htmlLink}"`, { stdio: 'ignore' });
-            } else {
-                execSync(`xdg-open "${event.htmlLink}"`, { stdio: 'ignore' });
-            }
+            openUrl(event.htmlLink);
             break;
         }
 

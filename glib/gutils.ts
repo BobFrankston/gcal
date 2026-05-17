@@ -316,6 +316,19 @@ export function parseDateTime(input: string): Date {
         return d;
     }
 
+    // Handle weekday name alone: "wed", "next wed", "friday" -> that day at midnight
+    const dayOnlyMatch = lower.match(/^(next\s+)?(sun|mon|tue|wed|thu|fri|sat)[a-z]*$/i);
+    if (dayOnlyMatch) {
+        const [, next, day] = dayOnlyMatch;
+        const targetDay = weekdayAbbr.indexOf(day.toLowerCase().slice(0, 3));
+        const d = new Date(now);
+        let daysUntil = targetDay - d.getDay();
+        if (daysUntil <= 0 || next) daysUntil += 7;
+        d.setDate(d.getDate() + daysUntil);
+        d.setHours(0, 0, 0, 0);
+        return d;
+    }
+
     // Handle month names: "jan 15", "jan 15 2026", "jan 15 3pm", "january 15 2026 3pm"
     const months = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
     const monthMatch = lower.match(/^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+(\d{1,2})(?:\s+(\d{4}))?(?:\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?)?$/i);

@@ -48,7 +48,7 @@ Commands:
   done <id>                    Mark task completed (id prefix)
   undone <id>                  Reopen a completed task
   del <id>                     Delete a task
-  edit <id> [-t title] [-when date] [-n notes]
+  edit | update <id> [-t title] [-when date] [-n notes]
   clear                        Remove all completed tasks from list
   move <id> -l <list>          Move task to another tasklist
   help [command]               Show help
@@ -109,11 +109,12 @@ const USAGE: Record<string, string> = {
   Delete a task by id prefix.
 `,
     edit: `gtask edit <id> [-t <title>] [-when <date>] [-n <notes>] [-l <list>]
+       gtask update <id> ...                   (alias)
   Update fields of an existing task. Only supplied fields change.
 
   Examples:
     gtask edit abc12345 -t "Write final report"
-    gtask edit abc12345 -when "next monday"
+    gtask update abc12345 -when "next monday"
     gtask edit abc12345 -n "draft attached"
 `,
     clear: `gtask clear [-l <list>]
@@ -127,7 +128,14 @@ const USAGE: Record<string, string> = {
 `
 };
 
+const HELP_ALIASES: Record<string, string> = {
+    'update': 'edit',
+    'reopen': 'undone',
+    'delete': 'del'
+};
+
 function showUsage(cmd?: string): void {
+    if (cmd) cmd = HELP_ALIASES[cmd] || cmd;
     if (cmd && USAGE[cmd]) {
         console.log(USAGE[cmd]);
         return;
@@ -469,7 +477,8 @@ async function main(): Promise<void> {
             break;
         }
 
-        case 'edit': {
+        case 'edit':
+        case 'update': {
             if (parsed.args.length < 1) { showUsage('edit'); process.exit(1); }
             const patch: Partial<Task> = {};
             if (parsed.title) patch.title = parsed.title;
