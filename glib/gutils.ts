@@ -223,7 +223,9 @@ export function parseDuration(duration: string): number {
 /** Parse natural date/time strings */
 export function parseDateTime(input: string): Date {
     const now = new Date();
-    const lower = input.toLowerCase().trim();
+    const lower = input.toLowerCase().trim()
+        .replace(/\bnoon\b/g, '12pm')
+        .replace(/\bmidnight\b/g, '12am');
 
     // Handle relative dates
     if (lower === 'today') {
@@ -401,7 +403,7 @@ export function parseDateTime(input: string): Date {
 /** True if input string contains a time-of-day component (e.g. "3pm", "15:30", "at 3") */
 export function hasTimeComponent(input: string): boolean {
     const lower = input.toLowerCase();
-    return /\d{1,2}:\d{2}/.test(lower) || /\d{1,2}\s*(am|pm)\b/.test(lower) || /\bat\s+\d/.test(lower);
+    return /\d{1,2}:\d{2}/.test(lower) || /\d{1,2}\s*(am|pm)\b/.test(lower) || /\bat\s+\d/.test(lower) || /\b(noon|midnight)\b/.test(lower);
 }
 
 /** Parse "YYYY-MM-DD" to a local Date at midnight (avoids UTC shift) */
