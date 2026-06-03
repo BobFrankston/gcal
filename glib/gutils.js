@@ -393,6 +393,41 @@ export function hasTimeComponent(input) {
     const lower = input.toLowerCase();
     return /\d{1,2}:\d{2}/.test(lower) || /\d{1,2}\s*(am|pm)\b/.test(lower) || /\bat\s+\d/.test(lower) || /\b(noon|midnight)\b/.test(lower);
 }
+/** True if input is a bare time of day with no date (e.g. "2:30pm", "14:30", "noon") */
+function isTimeOnly(input) {
+    const lower = input.toLowerCase().trim()
+        .replace(/\bnoon\b/g, '12pm')
+        .replace(/\bmidnight\b/g, '12am');
+    return /^(\d{1,2})(?::(\d{2}))?\s*(am|pm)$/.test(lower) || /^(\d{1,2}):(\d{2})$/.test(lower);
+}
+/** Parse a single date/time or a date/time range like "june 13 1pm to 2:30pm".
+ *  Recognized separators: "to", "until", "till", "-", "–", "—" (surrounded by spaces).
+ *  When the end is a bare time, it inherits the start's date (rolling to the next
+ *  day if the end falls at or before the start). Returns end=null when no range. */
+export function parseDateTimeRange(input) {
+    // Spaced words/dashes, or an unspaced hyphen right after am/pm ("1pm-2:30pm").
+    // The am/pm anchor keeps ISO dates like "2026-06-13" from being split.
+    const sep = input.match(/\s+(?:to|until|till|-|–|—)\s+|\s*[–—]\s*|(?<=[ap]m)\s*-\s*(?=\d)/i);
+    if (!sep) {
+        return { start: parseDateTime(input), end: null };
+    }
+    const startStr = input.slice(0, sep.index).trim();
+    const endStr = input.slice(sep.index + sep[0].length).trim();
+    const start = parseDateTime(startStr);
+    let end;
+    if (isTimeOnly(endStr)) {
+        const t = parseDateTime(endStr);
+        end = new Date(start);
+        end.setHours(t.getHours(), t.getMinutes(), 0, 0);
+        if (end.getTime() <= start.getTime()) {
+            end.setDate(end.getDate() + 1); // overnight, e.g. "11pm to 1am"
+        }
+    }
+    else {
+        end = parseDateTime(endStr);
+    }
+    return { start, end };
+}
 /** Parse "YYYY-MM-DD" to a local Date at midnight (avoids UTC shift) */
 export function parseAllDay(dateStr) {
     const [y, mo, d] = dateStr.split('-').map(Number);

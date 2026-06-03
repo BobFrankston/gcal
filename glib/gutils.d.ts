@@ -51,6 +51,14 @@ export declare function parseDuration(duration: string): number;
 export declare function parseDateTime(input: string): Date;
 /** True if input string contains a time-of-day component (e.g. "3pm", "15:30", "at 3") */
 export declare function hasTimeComponent(input: string): boolean;
+/** Parse a single date/time or a date/time range like "june 13 1pm to 2:30pm".
+ *  Recognized separators: "to", "until", "till", "-", "–", "—" (surrounded by spaces).
+ *  When the end is a bare time, it inherits the start's date (rolling to the next
+ *  day if the end falls at or before the start). Returns end=null when no range. */
+export declare function parseDateTimeRange(input: string): {
+    start: Date;
+    end: Date | null;
+};
 /** Parse "YYYY-MM-DD" to a local Date at midnight (avoids UTC shift) */
 export declare function parseAllDay(dateStr: string): Date;
 /** Format a Date as "YYYY-MM-DD" in local time */

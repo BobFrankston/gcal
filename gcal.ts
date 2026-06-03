@@ -15,7 +15,7 @@ import { createInterface } from 'readline/promises';
 import type { GoogleEvent, EventDateTime, EventsListResponse, CalendarListEntry, CalendarListResponse } from './glib/types.ts';
 import {
     loadConfig, saveConfig,
-    formatDateTime, formatDuration, parseDuration, parseDateTime,
+    formatDateTime, formatDuration, parseDuration, parseDateTime, parseDateTimeRange,
     hasTimeComponent, parseAllDay, formatYMD, normalizeUser
 } from './glib/gutils.js';
 import { setupAbortHandler, teardownAbortHandler, getAccessToken, apiFetch } from './glib/goauth.js';
@@ -345,6 +345,7 @@ const USAGE: Record<string, string> = {
        gcal add -clip                          AI-parsed from clipboard
        gcal add                                Interactive (type description)
   Add a calendar event. Default duration 1h. Use -r <dur> to add reminder(s).
+  <when> may be a range, e.g. "jun 13 1pm to 2:30pm" (no [duration] needed).
 
   -allday         Create an all-day event. The third arg is a day count
                   (default 1); the event spans that many days.
@@ -357,6 +358,7 @@ const USAGE: Record<string, string> = {
     gcal add "Lunch" "1/14/2026 12:00" "1h"
     gcal add "Meeting" "tomorrow 10:00"
     gcal add "Appointment" "jan 15 2pm"
+    gcal add "Review" "jun 13 1pm to 2:30pm"         (range sets the end)
     gcal add "Vacation" "jul 1" -allday              (1 day, all-day)
     gcal add "Conference" "jul 1" 3 -allday          (3-day all-day event)
     gcal add "Out of office" "jul 1" -allday -free   (all-day, not busy)
@@ -408,11 +410,13 @@ const USAGE: Record<string, string> = {
     resched: `gcal resched <id> <when> [duration]
   Reschedule an event. Preserves duration unless [duration] given.
   If <when> lacks a time-of-day, the original time is preserved.
+  <when> may be a range, e.g. "jun 13 1pm to 2:30pm" (sets the new end).
   All-day events stay all-day. Searches up to 30 days back by default
   (widen with -since).
 
   Examples:
     gcal resched abc12345 "next friday 3pm"
+    gcal resched abc12345 "jun 13 1pm to 2:30pm"
     gcal resched abc12345 tomorrow
     gcal resched abc12345 +1w
 `,
@@ -720,7 +724,7 @@ function reschedulePatch(
                 newStart = new Date(origStart);
                 newStart.setDate(newStart.getDate() + (unit.toLowerCase() === 'w' ? amt * 7 : amt));
             } else {
-                newStart = parseDateTime(whenArg);
+                newStart = parseDateTimeRange(whenArg).start;
                 newStart.setHours(0, 0, 0, 0);
             }
         } else {
@@ -739,6 +743,7 @@ function reschedulePatch(
     const origDurMs = origEnd.getTime() - origStart.getTime();
 
     let newStart: Date;
+    let rangeEnd: Date | null = null;
     if (whenArg) {
         const adv = whenArg.match(/^\+(\d+)([dwhm])$/i);
         if (adv) {
@@ -752,7 +757,9 @@ function reschedulePatch(
                 case 'm': newStart.setMinutes(newStart.getMinutes() + amt); break;
             }
         } else {
-            newStart = parseDateTime(whenArg);
+            const range = parseDateTimeRange(whenArg);
+            newStart = range.start;
+            rangeEnd = range.end;
             if (!hasTimeComponent(whenArg)) {
                 newStart.setHours(origStart.getHours(), origStart.getMinutes(), 0, 0);
             }
@@ -760,8 +767,11 @@ function reschedulePatch(
     } else {
         newStart = new Date(origStart);
     }
+    if (rangeEnd && durationArg) {
+        throw new Error('Specify either a time range or a [duration], not both.');
+    }
     const durMs = durationArg ? parseDuration(durationArg) * 60_000 : origDurMs;
-    const newEnd = new Date(newStart.getTime() + durMs);
+    const newEnd = rangeEnd ?? new Date(newStart.getTime() + durMs);
 
     const tz = event.start!.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone;
     const patch = {
@@ -1064,7 +1074,11 @@ async function main(): Promise<void> {
             // Explicit mode: gcal add "title" "when" [duration]
             if (parsed.args.length >= 2 && !parsed.clip) {
                 const [title, when, third] = parsed.args;
-                const startTime = parseDateTime(when);
+                const { start: startTime, end: rangeEnd } = parseDateTimeRange(when);
+                if (rangeEnd && third) {
+                    console.error('Specify either a time range or a [duration], not both.');
+                    process.exit(1);
+                }
 
                 const event: GoogleEvent = {
                     summary: title,
@@ -1084,8 +1098,8 @@ async function main(): Promise<void> {
                     event.start = { date: formatYMD(startD) };
                     event.end = { date: formatYMD(endD) };
                 } else {
-                    const durationMins = parseDuration(third || '1h');
-                    const endTime = new Date(startTime.getTime() + durationMins * 60 * 1000);
+                    const endTime = rangeEnd
+                        ?? new Date(startTime.getTime() + parseDuration(third || '1h') * 60 * 1000);
                     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
                     event.start = { dateTime: startTime.toISOString(), timeZone: tz };
                     event.end = { dateTime: endTime.toISOString(), timeZone: tz };
