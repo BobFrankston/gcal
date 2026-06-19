@@ -24,6 +24,7 @@
     "glib/**/*.js.map",
     "glib/**/*.d.ts",
     "glib/**/*.d.ts.map",
+    "bin/gcalics.exe",
     "tsconfig.json",
     "README.md",
     "gcal-credentials.json"
@@ -34,7 +35,8 @@
   },
   "scripts": {
     "postinstall": "node -e \"if(process.platform==='win32')console.log('\\nTip: run \\\"gcal assoc\\\" to associate .ics files with gcal')\"",
-    "build": "tsc",
+    "build:exe": "node bin/build-exe.mjs",
+    "build": "node bin/build-exe.mjs && tsc",
     "check": "tsc --noEmit",
     "prerelease:local": "git add -A && (git diff-index --quiet HEAD || git commit -m \"Pre-release commit\")",
     "preversion": "npm run build && git add -A",
@@ -59,11 +61,23 @@
     "@types/node": "^25.3.0"
   },
   "dependencies": {
-    "@bobfrankston/oauthsupport": "file:../../../projects/OAuth/OauthSupport",
+    "@bobfrankston/oauthsupport": "^1.0.32",
     "clipboardy": "^5.3.1",
     "ical.js": "^2.1.0"
   },
   "publishConfig": {
     "access": "public"
+  },
+  ".dependencies": {
+    "@bobfrankston/oauthsupport": "file:../../../projects/OAuth/OauthSupport",
+    "clipboardy": "^5.3.1",
+    "ical.js": "^2.1.0"
+  },
+  ".transformedSnapshot": {
+    "dependencies": {
+      "@bobfrankston/oauthsupport": "^1.0.32",
+      "clipboardy": "^5.3.1",
+      "ical.js": "^2.1.0"
+    }
   }
 }

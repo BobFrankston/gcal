@@ -3,9 +3,10 @@
  * gcal - Google Calendar CLI tool
  * Manage Google Calendar events with ICS import support
  *
- * Can be associated with .ics files for direct import:
- *   assoc .ics=icsfile
- *   ftype icsfile=gcal "%1"
+ * Can be associated with .ics files for direct import on Windows via
+ * `gcal assoc`, which registers the bundled gcalics.exe launcher (see
+ * setIcsAssoc). Double-clicking an .ics — or picking "gcal" in Open with —
+ * runs `gcalics.exe <file>`, which re-execs `node gcal.js <file>` (import).
  */
 
 import fs from 'fs';
@@ -822,13 +823,54 @@ function findByPrefix(events: GoogleEvent[], prefix: string, includeBirthdays: b
     return unique;
 }
 
+// ProgId we own for .ics. Distinct (not the generic "icsfile") so we never
+// clobber another app's registration and our cleanup stays scoped.
+const ICS_PROGID = 'gcal.ics';
+const ICS_LAUNCHER = 'gcalics.exe';
+
+/**
+ * Resolve the gcalics.exe launcher, copying the package-shipped copy to a
+ * stable per-user location (%LOCALAPPDATA%\gcal\bin) the first time. We
+ * register an ABSOLUTE path to a real .exe — not bare `gcal`/`gcal.cmd` —
+ * because (a) Explorer's file-association launch doesn't resolve PATH/PATHEXT
+ * reliably, and (b) only a named .exe shows up by name in the "Open with"
+ * picker (a .cmd doesn't appear; node.exe appears as "Node.js JavaScript
+ * Runtime"). The exe re-execs `node gcal.js <file>`.
+ */
+function resolveLauncherExe(): string | null {
+    const pkgExe = path.join(import.meta.dirname, 'bin', ICS_LAUNCHER);
+    const perUserDir = path.join(process.env.LOCALAPPDATA || '', 'gcal', 'bin');
+    const perUserExe = path.join(perUserDir, ICS_LAUNCHER);
+    // Copy/refresh the per-user copy when the shipped one is newer (or absent).
+    if (fs.existsSync(pkgExe)) {
+        try {
+            if (!fs.existsSync(perUserExe) ||
+                fs.statSync(pkgExe).mtimeMs > fs.statSync(perUserExe).mtimeMs) {
+                fs.mkdirSync(perUserDir, { recursive: true });
+                fs.copyFileSync(pkgExe, perUserExe);
+            }
+            return perUserExe;
+        } catch {
+            // Couldn't copy (locked/permission) — register the in-package path
+            // so double-click still works, just from node_modules.
+            return pkgExe;
+        }
+    }
+    // Dev tree without a built exe yet: fall back to a copied one if present.
+    if (fs.existsSync(perUserExe)) return perUserExe;
+    return null;
+}
+
 function checkIcsAssoc(): boolean {
     if (process.platform !== 'win32') return true;
     try {
-        const result = execSync('cmd /c assoc .ics 2>nul', { encoding: 'utf-8' }).trim();
-        if (!result.includes('icsfile')) return false;
-        const ftype = execSync('cmd /c ftype icsfile 2>nul', { encoding: 'utf-8' }).trim();
-        return ftype.includes('gcal');
+        // Our association is set iff the ProgId's open command points at our
+        // launcher exe.
+        const out = execSync(
+            `reg query "HKCU\\Software\\Classes\\${ICS_PROGID}\\shell\\open\\command" /ve`,
+            { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
+        );
+        return out.toLowerCase().includes(ICS_LAUNCHER);
     } catch {
         return false;
     }
@@ -839,10 +881,37 @@ function setIcsAssoc(): boolean {
         console.log('File associations are only supported on Windows.');
         return false;
     }
+    const exe = resolveLauncherExe();
+    if (!exe) {
+        console.error(`Launcher ${ICS_LAUNCHER} not found — package may have been built without it.`);
+        return false;
+    }
+    // `\"<path>\" \"%1\"` — the doubled backslashes escape the quotes through
+    // cmd.exe's shell layer (one level is stripped before the value reaches
+    // reg.exe). Quoting %1 keeps spaces, `&`, `?` in the path intact.
+    const cmd = `\\"${exe}\\" \\"%1\\"`;
+    const keys: Array<[string, string, string]> = [
+        // [HKCU\path, value-name ('' = default), value-data]
+        // Make gcal the default ProgId for .ics, and list it among the
+        // "Open with" choices for the extension.
+        [`HKCU\\Software\\Classes\\.ics`, '', ICS_PROGID],
+        [`HKCU\\Software\\Classes\\.ics\\OpenWithProgids`, ICS_PROGID, ''],
+        // Our ProgId: friendly text + the open command.
+        [`HKCU\\Software\\Classes\\${ICS_PROGID}`, '', 'iCalendar File (gcal)'],
+        [`HKCU\\Software\\Classes\\${ICS_PROGID}\\shell\\open\\command`, '', cmd],
+        // Register the launcher as a named application so it appears as "gcal"
+        // (FriendlyAppName + VERSIONINFO) in the Win11 "Open with" picker, and
+        // mark it a recommended handler for .ics via SupportedTypes.
+        [`HKCU\\Software\\Classes\\Applications\\${ICS_LAUNCHER}`, 'FriendlyAppName', 'gcal'],
+        [`HKCU\\Software\\Classes\\Applications\\${ICS_LAUNCHER}\\shell\\open\\command`, '', cmd],
+        [`HKCU\\Software\\Classes\\Applications\\${ICS_LAUNCHER}\\SupportedTypes`, '.ics', ''],
+    ];
     try {
-        // Use HKCU registry — no admin needed
-        execSync('reg add HKCU\\Software\\Classes\\.ics /ve /d icsfile /f', { stdio: 'pipe' });
-        execSync('reg add HKCU\\Software\\Classes\\icsfile\\shell\\open\\command /ve /d "gcal \\"%1\\"" /f', { stdio: 'pipe' });
+        for (const [key, name, data] of keys) {
+            const valueArg = name ? `/v "${name}"` : '/ve';
+            const dataArg = data ? `/d "${data}"` : '/d ""';
+            execSync(`reg add "${key}" ${valueArg} /t REG_SZ ${dataArg} /f`, { stdio: 'pipe' });
+        }
         return true;
     } catch (e: any) {
         console.error(`Failed to set file association: ${e.message}`);
