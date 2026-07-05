@@ -115,7 +115,7 @@ Rules:
 - summary: concise event title
 - startDateTime: ISO format, resolve relative dates (tomorrow, next Friday, etc.) using today's date
 - duration: format as "Xh", "Xm", or "XhYm" (default "1h" if not specified)
-- timeZone: IANA timezone (e.g. "America/New_York"). Infer from location if the event is in a different timezone than the user. Default to the user's local timezone if unclear.
+- timeZone: IANA timezone (e.g. "America/New_York"). If the text explicitly states a timezone — a zone name, abbreviation, UTC offset, or a parenthetical like "(Malaysia Time - Kuala Lumpur)" as in Google Calendar invitation emails — use that zone, and give startDateTime as the wall-clock time IN THAT ZONE (do not convert to the user's timezone). Otherwise infer from the event's location if it is clearly in a different timezone than the user. Default to the user's local timezone only when nothing indicates one.
 - location: include if mentioned, omit if not
 - description: include extra details if any, omit if none
 - Return ONLY the JSON array, no markdown, no explanation`;
