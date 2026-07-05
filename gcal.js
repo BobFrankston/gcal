@@ -12,7 +12,7 @@ import fs from 'fs';
 import path from 'path';
 import { execSync } from 'child_process';
 import { createInterface } from 'readline/promises';
-import { loadConfig, saveConfig, formatDateTime, formatDuration, parseDuration, parseDateTime, parseDateTimeRange, hasTimeComponent, parseAllDay, formatYMD, normalizeUser } from './glib/gutils.js';
+import { loadConfig, saveConfig, formatDateTime, formatDuration, parseDuration, parseDateTime, parseDateTimeRange, hasTimeComponent, parseAllDay, formatYMD, normalizeUser, zonedWallClockToDate } from './glib/gutils.js';
 import { setupAbortHandler, teardownAbortHandler, getAccessToken, apiFetch } from './glib/goauth.js';
 import { extractEventsFromText, readClipboard } from './glib/aihelper.js';
 import pkg from './package.json' with { type: 'json' };
@@ -1152,7 +1152,7 @@ async function main() {
                     console.log(`  Where: ${extracted.location}`);
                 if (extracted.description)
                     console.log(`  Note:  ${extracted.description}`);
-                await checkProximity(token, parsed.calendar, new Date(startDt), endDate);
+                await checkProximity(token, parsed.calendar, zonedWallClockToDate(startDt, tz), zonedWallClockToDate(endDt, tz));
             }
             if (events.length === 0) {
                 console.error('No valid events extracted');

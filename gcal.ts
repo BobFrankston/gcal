@@ -17,7 +17,7 @@ import type { GoogleEvent, EventDateTime, EventsListResponse, CalendarListEntry,
 import {
     loadConfig, saveConfig,
     formatDateTime, formatDuration, parseDuration, parseDateTime, parseDateTimeRange,
-    hasTimeComponent, parseAllDay, formatYMD, normalizeUser
+    hasTimeComponent, parseAllDay, formatYMD, normalizeUser, zonedWallClockToDate
 } from './glib/gutils.js';
 import { setupAbortHandler, teardownAbortHandler, getAccessToken, apiFetch } from './glib/goauth.js';
 import { extractEventsFromText, readClipboard } from './glib/aihelper.js';
@@ -1256,7 +1256,8 @@ async function main(): Promise<void> {
                 if (extracted.location) console.log(`  Where: ${extracted.location}`);
                 if (extracted.description) console.log(`  Note:  ${extracted.description}`);
 
-                await checkProximity(token, parsed.calendar, new Date(startDt), endDate);
+                await checkProximity(token, parsed.calendar,
+                    zonedWallClockToDate(startDt, tz), zonedWallClockToDate(endDt, tz));
             }
 
             if (events.length === 0) {

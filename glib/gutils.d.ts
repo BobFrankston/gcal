@@ -37,6 +37,12 @@ export declare function formatDateTime(dt: {
     dateTime?: string;
     timeZone?: string;
 }): string;
+/**
+ * Convert a bare wall-clock string ("YYYY-MM-DDTHH:mm[:ss]", no offset) in an
+ * IANA timezone to the actual UTC instant. Strings that already carry an
+ * offset (Z or +hh:mm) fall through to normal Date parsing.
+ */
+export declare function zonedWallClockToDate(dateTime: string, timeZone: string): Date;
 /** Format duration in hours (e.g., "1.5 hrs", "2 hrs", "30 min") */
 export declare function formatDuration(start: {
     date?: string;

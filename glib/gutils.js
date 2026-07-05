@@ -150,6 +150,34 @@ export function formatDateTime(dt) {
     }
     return '(no time)';
 }
+/** Offset (ms) of an IANA timezone from UTC at a given instant. */
+function tzOffsetMs(utcMs, timeZone) {
+    const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone, hour12: false,
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit'
+    }).formatToParts(new Date(utcMs));
+    const get = (t) => Number(parts.find(p => p.type === t)?.value);
+    const wallAsUtc = Date.UTC(get('year'), get('month') - 1, get('day'), get('hour') % 24, get('minute'), get('second'));
+    return wallAsUtc - utcMs;
+}
+/**
+ * Convert a bare wall-clock string ("YYYY-MM-DDTHH:mm[:ss]", no offset) in an
+ * IANA timezone to the actual UTC instant. Strings that already carry an
+ * offset (Z or +hh:mm) fall through to normal Date parsing.
+ */
+export function zonedWallClockToDate(dateTime, timeZone) {
+    const m = dateTime.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/);
+    if (!m)
+        return new Date(dateTime);
+    const wallAsUtc = Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +(m[6] || 0));
+    let offset = tzOffsetMs(wallAsUtc, timeZone);
+    // Refine once in case the first guess straddles a DST transition
+    const offset2 = tzOffsetMs(wallAsUtc - offset, timeZone);
+    if (offset2 !== offset)
+        offset = offset2;
+    return new Date(wallAsUtc - offset);
+}
 /** Format duration in hours (e.g., "1.5 hrs", "2 hrs", "30 min") */
 export function formatDuration(start, end) {
     if (start.date || end.date) {
