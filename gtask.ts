@@ -281,7 +281,7 @@ function printTaskTable(tasks: Task[]): void {
 
 /** Build a date-only RFC3339 due value (Google ignores the time portion). */
 function buildDue(whenArg: string): string {
-    const d = parseDateTime(whenArg);
+    const d = parseDateTime(whenArg, { preferFuture: true });
     return `${formatYMD(d)}T00:00:00.000Z`;
 }
 

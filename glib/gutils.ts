@@ -248,8 +248,9 @@ export function parseDuration(duration: string): number {
     return minutes;
 }
 
-/** Parse natural date/time strings */
-export function parseDateTime(input: string): Date {
+/** Parse natural date/time strings.
+ *  opts.preferFuture: a bare time (no date) that has already passed today rolls to tomorrow. */
+export function parseDateTime(input: string, opts?: { preferFuture?: boolean }): Date {
     const now = new Date();
     const lower = input.toLowerCase().trim()
         .replace(/\bnoon\b/g, '12pm')
@@ -404,6 +405,7 @@ export function parseDateTime(input: string): Date {
         const [, hour, min] = timeMatch;
         const d = new Date(now);
         d.setHours(parseInt(hour), parseInt(min), 0, 0);
+        if (opts?.preferFuture && d.getTime() <= now.getTime()) d.setDate(d.getDate() + 1);
         return d;
     }
 
@@ -416,6 +418,7 @@ export function parseDateTime(input: string): Date {
         if (ampm === 'am' && h === 12) h = 0;
         const d = new Date(now);
         d.setHours(h, parseInt(min || '0'), 0, 0);
+        if (opts?.preferFuture && d.getTime() <= now.getTime()) d.setDate(d.getDate() + 1);
         return d;
     }
 
@@ -446,16 +449,16 @@ function isTimeOnly(input: string): boolean {
  *  Recognized separators: "to", "until", "till", "-", "–", "—" (surrounded by spaces).
  *  When the end is a bare time, it inherits the start's date (rolling to the next
  *  day if the end falls at or before the start). Returns end=null when no range. */
-export function parseDateTimeRange(input: string): { start: Date; end: Date | null } {
+export function parseDateTimeRange(input: string, opts?: { preferFuture?: boolean }): { start: Date; end: Date | null } {
     // Spaced words/dashes, or an unspaced hyphen right after am/pm ("1pm-2:30pm").
     // The am/pm anchor keeps ISO dates like "2026-06-13" from being split.
     const sep = input.match(/\s+(?:to|until|till|-|–|—)\s+|\s*[–—]\s*|(?<=[ap]m)\s*-\s*(?=\d)/i);
     if (!sep) {
-        return { start: parseDateTime(input), end: null };
+        return { start: parseDateTime(input, opts), end: null };
     }
     const startStr = input.slice(0, sep.index!).trim();
     const endStr = input.slice(sep.index! + sep[0].length).trim();
-    const start = parseDateTime(startStr);
+    const start = parseDateTime(startStr, opts);
     let end: Date;
     if (isTimeOnly(endStr)) {
         const t = parseDateTime(endStr);

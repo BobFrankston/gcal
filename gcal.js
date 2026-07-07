@@ -638,7 +638,7 @@ function reschedulePatch(event, whenArg, durationArg) {
                 newStart.setDate(newStart.getDate() + (unit.toLowerCase() === 'w' ? amt * 7 : amt));
             }
             else {
-                newStart = parseDateTimeRange(whenArg).start;
+                newStart = parseDateTimeRange(whenArg, { preferFuture: true }).start;
                 newStart.setHours(0, 0, 0, 0);
             }
         }
@@ -678,7 +678,7 @@ function reschedulePatch(event, whenArg, durationArg) {
             }
         }
         else {
-            const range = parseDateTimeRange(whenArg);
+            const range = parseDateTimeRange(whenArg, { preferFuture: true });
             newStart = range.start;
             rangeEnd = range.end;
             if (!hasTimeComponent(whenArg)) {
@@ -1039,7 +1039,7 @@ async function main() {
             // Explicit mode: gcal add "title" "when" [duration]
             if (parsed.args.length >= 2 && !parsed.clip) {
                 const [title, when, third] = parsed.args;
-                const { start: startTime, end: rangeEnd } = parseDateTimeRange(when);
+                const { start: startTime, end: rangeEnd } = parseDateTimeRange(when, { preferFuture: true });
                 if (rangeEnd && third) {
                     console.error('Specify either a time range or a [duration], not both.');
                     process.exit(1);
