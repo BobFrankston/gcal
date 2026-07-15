@@ -1097,7 +1097,21 @@ async function main() {
                     console.error('Clipboard is empty');
                     process.exit(1);
                 }
-                console.log(`Clipboard: ${inputText.substring(0, 200)}${inputText.length > 200 ? '...' : ''}`);
+                const preview = inputText.substring(0, 200) + (inputText.length > 200 ? '...' : '');
+                const boxWidth = 60;
+                const boxLines = [];
+                for (const raw of preview.split(/\r?\n/)) {
+                    if (raw.length <= boxWidth)
+                        boxLines.push(raw);
+                    else
+                        for (let i = 0; i < raw.length; i += boxWidth)
+                            boxLines.push(raw.substring(i, i + boxWidth));
+                }
+                const title = ' Clipboard contents ';
+                console.log('┌─' + title + '─'.repeat(boxWidth - title.length + 1) + '┐');
+                for (const line of boxLines)
+                    console.log('│ ' + line.padEnd(boxWidth) + ' │');
+                console.log('└' + '─'.repeat(boxWidth + 2) + '┘');
             }
             else if (parsed.args.length === 1) {
                 inputText = parsed.args[0].trim();
