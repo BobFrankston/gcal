@@ -34,7 +34,6 @@
     "url": "git+https://github.com/BobFrankston/gcal.git"
   },
   "scripts": {
-    "postinstall": "node -e \"if(process.platform==='win32')console.log('\\nTip: run \\\"gcal assoc\\\" to associate .ics files with gcal')\"",
     "build:exe": "node bin/build-exe.mjs",
     "build": "node bin/build-exe.mjs && tsc",
     "check": "tsc --noEmit",
@@ -61,11 +60,23 @@
     "@types/node": "^25.3.0"
   },
   "dependencies": {
-    "@bobfrankston/oauthsupport": "file:../../../projects/OAuth/OauthSupport",
+    "@bobfrankston/oauthsupport": "^1.0.34",
     "clipboardy": "^5.3.1",
     "ical.js": "^2.1.0"
   },
   "publishConfig": {
     "access": "public"
+  },
+  ".dependencies": {
+    "@bobfrankston/oauthsupport": "file:../../../projects/OAuth/OauthSupport",
+    "clipboardy": "^5.3.1",
+    "ical.js": "^2.1.0"
+  },
+  ".transformedSnapshot": {
+    "dependencies": {
+      "@bobfrankston/oauthsupport": "^1.0.34",
+      "clipboardy": "^5.3.1",
+      "ical.js": "^2.1.0"
+    }
   }
 }
