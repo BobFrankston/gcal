@@ -1,6 +1,8 @@
 # TODO
 
-## Convert to noEmit `.ts`-only (Node 25+)
+## SHELVED: Convert to noEmit `.ts`-only (Node 25+)
+
+Shelved 2026-07-24: `.ts`-only (type stripping) is reserved for single-file apps; gcal is multi-file (gcal.ts, gtask.ts, glib/) so it keeps emitting `.js`. Original plan kept below for reference.
 
 Goal: stop emitting `.js`, run `.ts` directly via Node's native type stripping.
 

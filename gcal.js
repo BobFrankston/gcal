@@ -204,7 +204,7 @@ async function importIcsFile(filePath, accessToken, calendarId = 'primary') {
                 if (attendees.length > 0) {
                     googleEvent.attendees = attendees.map(att => {
                         const emailValue = att.getFirstValue();
-                        const email = (typeof emailValue === 'string' ? emailValue.replace('mailto:', '') : emailValue?.toString() || '');
+                        const email = (typeof emailValue === 'string' ? emailValue : emailValue?.toString() || '').replace(/^mailto:/i, '');
                         const cn = att.getParameter('cn');
                         const displayName = Array.isArray(cn) ? cn[0] : cn;
                         return { email, displayName: displayName || undefined };
@@ -221,7 +221,7 @@ async function importIcsFile(filePath, accessToken, calendarId = 'primary') {
             catch (e) {
                 const summary = vevent.getFirstPropertyValue('summary') || 'unknown';
                 result.errors.push(`${summary}: ${e.message}`);
-                console.error(`  ! Failed: ${summary}`);
+                console.error(`  ! Failed: ${summary}\n    ${e.message}`);
             }
         }
     }

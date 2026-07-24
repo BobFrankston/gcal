@@ -93,9 +93,11 @@ export interface ExtractedEvent {
     description?: string;
 }
 
+// NOTE: rmfmail's New-event dialog uses this same prompt (mailx-service
+// extractEventGcalStyle) — keep the two in sync when editing.
 const EVENT_EXTRACTION_PROMPT = `Extract calendar event details from the user's text and return ONLY valid JSON.
 
-Today's date is {{TODAY}}. The user's local timezone is {{TIMEZONE}}.
+Today's date is {{TODAY}} and the current local time is {{NOW}}. The user's local timezone is {{TIMEZONE}}.
 
 The text may describe one or multiple events. Always return a JSON array of event objects.
 
@@ -114,6 +116,7 @@ Output format:
 Rules:
 - summary: concise event title
 - startDateTime: ISO format, resolve relative dates (tomorrow, next Friday, etc.) using today's date
+- If only a time of day is given with no date and that time has already passed today (compare against the current local time), schedule it for tomorrow
 - duration: format as "Xh", "Xm", or "XhYm" (default "1h" if not specified)
 - timeZone: IANA timezone (e.g. "America/New_York"). If the text explicitly states a timezone — a zone name, abbreviation, UTC offset, or a parenthetical like "(Malaysia Time - Kuala Lumpur)" as in Google Calendar invitation emails — use that zone, and give startDateTime as the wall-clock time IN THAT ZONE (do not convert to the user's timezone). Otherwise infer from the event's location if it is clearly in a different timezone than the user. Default to the user's local timezone only when nothing indicates one.
 - location: include if mentioned, omit if not
@@ -124,11 +127,17 @@ export async function extractEventsFromText(text: string): Promise<ExtractedEven
     const apiKey = await ensureAnthropicKey();
     if (!apiKey) return [];
 
-    const today = new Date().toISOString().split('T')[0];
-    const dayName = new Date().toLocaleDateString('en-US', { weekday: 'long' });
+    // Local wall-clock, not toISOString() — UTC date is tomorrow during a
+    // late-evening run, which shifted every relative date by a day.
+    const nowD = new Date();
+    const p2 = (n: number) => String(n).padStart(2, '0');
+    const today = `${nowD.getFullYear()}-${p2(nowD.getMonth() + 1)}-${p2(nowD.getDate())}`;
+    const nowHM = `${p2(nowD.getHours())}:${p2(nowD.getMinutes())}`;
+    const dayName = nowD.toLocaleDateString('en-US', { weekday: 'long' });
     const localTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
     const systemPrompt = EVENT_EXTRACTION_PROMPT
         .replace('{{TODAY}}', `${today} (${dayName})`)
+        .replace('{{NOW}}', nowHM)
         .replace('{{TIMEZONE}}', localTz);
 
     try {
