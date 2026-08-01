@@ -14,7 +14,7 @@ import { execSync } from 'child_process';
 import { createInterface } from 'readline/promises';
 import { loadConfig, saveConfig, formatDateTime, formatDuration, parseDuration, parseDateTime, parseDateTimeRange, hasTimeComponent, parseAllDay, formatYMD, normalizeUser, zonedWallClockToDate } from './glib/gutils.js';
 import { setupAbortHandler, teardownAbortHandler, getAccessToken, apiFetch } from './glib/goauth.js';
-import { extractEventsFromText, readClipboard } from './glib/aihelper.js';
+import { extractEventsFromText, extractEventsFromImage, readClipboard, readClipboardImage } from './glib/aihelper.js';
 import pkg from './package.json' with { type: 'json' };
 const VERSION = pkg.version;
 const CALENDAR_API_BASE = 'https://www.googleapis.com/calendar/v3';
@@ -302,6 +302,9 @@ const USAGE = {
   -free           Mark the event as Free (does not block time / not busy).
   -busy           Mark the event as Busy (the default).
   -open           Open the event in the browser after creating it.
+  -clip           Read the event from the clipboard. Text is used when
+                  present; otherwise an image on the clipboard (screenshot
+                  of an invitation, flyer, or a copied image file) is read.
 
   Examples:
     gcal add "Dentist" "Friday 3pm" "1h"
@@ -313,7 +316,7 @@ const USAGE = {
     gcal add "Conference" "jul 1" 3 -allday          (3-day all-day event)
     gcal add "Out of office" "jul 1" -allday -free   (all-day, not busy)
     gcal add "Dentist appointment Friday 3pm for 1 hour"
-    gcal add -clip
+    gcal add -clip                                  (text, or image if none)
     gcal add "Dentist" "Friday 3pm" -r 30m
 `,
     update: `gcal update <id> [options]
@@ -1089,29 +1092,41 @@ async function main() {
                 break;
             }
             // AI mode: freeform text from clipboard, keyboard, or single arg
-            let inputText;
+            let inputText = '';
+            let inputImage = null;
             if (parsed.clip) {
                 console.log('Reading from clipboard...');
                 inputText = readClipboard();
                 if (!inputText) {
-                    console.error('Clipboard is empty');
-                    process.exit(1);
+                    // No text — fall back to an image (screenshot of an invite, flyer, ...)
+                    inputImage = readClipboardImage();
+                    if (!inputImage) {
+                        console.error('Clipboard is empty (no text or image)');
+                        process.exit(1);
+                    }
+                    const dims = inputImage.width && inputImage.height
+                        ? `${inputImage.width}x${inputImage.height}, ` : '';
+                    const kb = (inputImage.bytes / 1024).toFixed(0);
+                    const what = inputImage.source ? `image file ${inputImage.source}` : 'image';
+                    console.log(`Clipboard ${what} (${dims}${kb} KB, ${inputImage.mediaType})`);
                 }
-                const preview = inputText.substring(0, 200) + (inputText.length > 200 ? '...' : '');
-                const boxWidth = 60;
-                const boxLines = [];
-                for (const raw of preview.split(/\r?\n/)) {
-                    if (raw.length <= boxWidth)
-                        boxLines.push(raw);
-                    else
-                        for (let i = 0; i < raw.length; i += boxWidth)
-                            boxLines.push(raw.substring(i, i + boxWidth));
+                else {
+                    const preview = inputText.substring(0, 200) + (inputText.length > 200 ? '...' : '');
+                    const boxWidth = 60;
+                    const boxLines = [];
+                    for (const raw of preview.split(/\r?\n/)) {
+                        if (raw.length <= boxWidth)
+                            boxLines.push(raw);
+                        else
+                            for (let i = 0; i < raw.length; i += boxWidth)
+                                boxLines.push(raw.substring(i, i + boxWidth));
+                    }
+                    const title = ' Clipboard contents ';
+                    console.log('┌─' + title + '─'.repeat(boxWidth - title.length + 1) + '┐');
+                    for (const line of boxLines)
+                        console.log('│ ' + line.padEnd(boxWidth) + ' │');
+                    console.log('└' + '─'.repeat(boxWidth + 2) + '┘');
                 }
-                const title = ' Clipboard contents ';
-                console.log('┌─' + title + '─'.repeat(boxWidth - title.length + 1) + '┐');
-                for (const line of boxLines)
-                    console.log('│ ' + line.padEnd(boxWidth) + ' │');
-                console.log('└' + '─'.repeat(boxWidth + 2) + '┘');
             }
             else if (parsed.args.length === 1) {
                 inputText = parsed.args[0].trim();
@@ -1130,9 +1145,11 @@ async function main() {
                 }
             }
             console.log('Extracting event details...');
-            const extractedEvents = await extractEventsFromText(inputText);
+            const extractedEvents = inputImage
+                ? await extractEventsFromImage(inputImage)
+                : await extractEventsFromText(inputText);
             if (extractedEvents.length === 0) {
-                console.error('Failed to extract event details from text');
+                console.error(`Failed to extract event details from ${inputImage ? 'image' : 'text'}`);
                 process.exit(1);
             }
             const localTz = Intl.DateTimeFormat().resolvedOptions().timeZone;

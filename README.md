@@ -30,7 +30,7 @@ gcal help <command>        # Detailed help for one command
 | `show <id>` | Show full details for an event (`-json` for raw JSON) |
 | `add <title> <when> [duration]` | Add event (explicit) |
 | `add "<free text>"` | Add event (AI-parsed) |
-| `add -clip` | Add event from clipboard (AI-parsed) |
+| `add -clip` | Add event from clipboard text — or image, if there is no text (AI-parsed) |
 | `add` | Add event interactively |
 | `del \| delete <id> [id2...]` | Delete event(s) by ID prefix |
 | `remind <id> <dur> [dur2...]` | Add reminder(s) |
@@ -50,7 +50,7 @@ gcal help <command>        # Detailed help for one command
 | `-n <count>` | Number of events to list |
 | `-v`, `-verbose` | Show event IDs and links |
 | `-b`, `-birthdays` | Include birthday events |
-| `-clip` | Read from clipboard (for `add`) |
+| `-clip` | Read from clipboard — text, or an image if there is no text (for `add`) |
 | `-r`, `-reminder <dur>` | Add popup reminder (e.g. `30m`, `1h`); repeatable |
 | `-since <date>` | Start listing from `<date>` |
 | `-till <date>` | End listing at `<date>` |
@@ -76,6 +76,21 @@ gcal resched abc12345 "next friday 3pm"
 gcal snooze abc12345 +1w
 gcal -u bob@gmail.com
 ```
+
+### Clipboard images
+
+`gcal add -clip` prefers clipboard **text**. When the clipboard has no text, it
+reads an **image** instead — a screenshot of an invitation, email, flyer, or an
+image file copied in Explorer — and extracts the event(s) from it. Large images
+are downscaled (long edge 1568px, JPEG if still oversized) before being sent.
+
+```bash
+# Win+Shift+S to snip an event flyer, then:
+gcal add -clip
+```
+
+Windows works out of the box. macOS needs [`pngpaste`](https://github.com/jcsalterego/pngpaste)
+(`brew install pngpaste`); Linux needs `wl-paste` (Wayland) or `xclip` (X11).
 
 ### Conflict / proximity warnings
 

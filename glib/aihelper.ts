@@ -5,7 +5,9 @@
  */
 
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
+import { execFileSync } from 'child_process';
 import { createInterface } from 'readline/promises';
 import clipboardy from 'clipboardy';
 
@@ -123,7 +125,32 @@ Rules:
 - description: include extra details if any, omit if none
 - Return ONLY the JSON array, no markdown, no explanation`;
 
+/** Appended to the system prompt when the input is an image rather than text. */
+const IMAGE_INPUT_ADDENDUM = `
+
+The input is an image — typically a screenshot of an invitation, email, meeting
+request, flyer, poster, or calendar page. Read all visible text, including dates,
+times, timezones, and locations, and extract the event(s) it describes. Ignore
+surrounding chrome (browser tabs, toolbars, signatures, ads). If the image shows
+no identifiable event, return an empty JSON array.`;
+
+type ContentBlock =
+    | { type: 'text'; text: string }
+    | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } };
+
 export async function extractEventsFromText(text: string): Promise<ExtractedEvent[]> {
+    return extractEvents([{ type: 'text', text }], false);
+}
+
+/** Extract events from a clipboard/file image (screenshot of an invite, flyer, etc.) */
+export async function extractEventsFromImage(image: ClipboardImage): Promise<ExtractedEvent[]> {
+    return extractEvents([
+        { type: 'image', source: { type: 'base64', media_type: image.mediaType, data: image.base64 } },
+        { type: 'text', text: 'Extract the calendar event(s) shown in this image.' }
+    ], true);
+}
+
+async function extractEvents(blocks: ContentBlock[], isImage: boolean): Promise<ExtractedEvent[]> {
     const apiKey = await ensureAnthropicKey();
     if (!apiKey) return [];
 
@@ -138,7 +165,8 @@ export async function extractEventsFromText(text: string): Promise<ExtractedEven
     const systemPrompt = EVENT_EXTRACTION_PROMPT
         .replace('{{TODAY}}', `${today} (${dayName})`)
         .replace('{{NOW}}', nowHM)
-        .replace('{{TIMEZONE}}', localTz);
+        .replace('{{TIMEZONE}}', localTz)
+        + (isImage ? IMAGE_INPUT_ADDENDUM : '');
 
     try {
         const response = await fetch('https://api.anthropic.com/v1/messages', {
@@ -150,11 +178,11 @@ export async function extractEventsFromText(text: string): Promise<ExtractedEven
             },
             body: JSON.stringify({
                 model: 'claude-haiku-4-5-20251001',
-                max_tokens: 512,
+                max_tokens: 2048,
                 system: systemPrompt,
                 messages: [{
                     role: 'user',
-                    content: text
+                    content: blocks
                 }]
             })
         });
@@ -162,7 +190,7 @@ export async function extractEventsFromText(text: string): Promise<ExtractedEven
         if (!response.ok) {
             const errorText = await response.text();
             console.error(`Claude API error: ${response.status} ${errorText}`);
-            return null;
+            return [];
         }
 
         const data = await response.json() as any;
@@ -277,5 +305,169 @@ export function readClipboard(): string {
         return clipboardy.readSync().trim();
     } catch {
         throw new Error('Failed to read clipboard');
+    }
+}
+
+export interface ClipboardImage {
+    base64: string;
+    mediaType: string;
+    bytes: number;          /** size of the encoded image */
+    width?: number;
+    height?: number;
+    source?: string;        /** original file name, when the clipboard held a file */
+}
+
+/** Claude accepts up to ~5MB per image; stay under it after base64 expansion. */
+const MAX_IMAGE_BYTES = 3_500_000;
+/** Claude downsamples anything larger, so shrinking here is free. */
+const MAX_IMAGE_EDGE = 1568;
+
+// Emits one line: IMAGE|<png path>|<w>|<h>, FILE|<path>|<w>|<h>, or NONE.
+// Windows PowerShell (not pwsh) — clipboard access needs an STA thread.
+const WIN_CLIP_IMAGE_PS1 = `param([string]$Out)
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+
+function Save-Scaled([System.Drawing.Image]$img, [string]$path) {
+    $w = $img.Width; $h = $img.Height
+    $long = [Math]::Max($w, $h)
+    if ($long -gt ${MAX_IMAGE_EDGE}) {
+        $scale = ${MAX_IMAGE_EDGE} / $long
+        $w = [int][Math]::Round($img.Width * $scale)
+        $h = [int][Math]::Round($img.Height * $scale)
+        $bmp = New-Object System.Drawing.Bitmap($w, $h)
+        $g = [System.Drawing.Graphics]::FromImage($bmp)
+        $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+        $g.DrawImage($img, 0, 0, $w, $h)
+        $g.Dispose()
+        $bmp.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
+        $bmp.Dispose()
+    } else {
+        $img.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
+    }
+    # PNG of a photograph can be huge; fall back to JPEG rather than blowing the API limit.
+    if ((Get-Item $path).Length -gt ${MAX_IMAGE_BYTES}) {
+        $src = [System.Drawing.Image]::FromFile($path)
+        $copy = New-Object System.Drawing.Bitmap($src)
+        $src.Dispose()
+        $enc = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.MimeType -eq 'image/jpeg' }
+        $prm = New-Object System.Drawing.Imaging.EncoderParameters(1)
+        $prm.Param[0] = New-Object System.Drawing.Imaging.EncoderParameter([System.Drawing.Imaging.Encoder]::Quality, 85)
+        $jpg = [System.IO.Path]::ChangeExtension($path, '.jpg')
+        $copy.Save($jpg, $enc, $prm)
+        $copy.Dispose()
+        Remove-Item $path -Force
+        $path = $jpg
+    }
+    return @($path, $w, $h)
+}
+
+if ([Windows.Forms.Clipboard]::ContainsImage()) {
+    $img = [Windows.Forms.Clipboard]::GetImage()
+    $r = Save-Scaled $img $Out
+    $img.Dispose()
+    "IMAGE|$($r[0])|$($r[1])|$($r[2])"
+} elseif ([Windows.Forms.Clipboard]::ContainsFileDropList()) {
+    $f = [Windows.Forms.Clipboard]::GetFileDropList() |
+         Where-Object { $_ -match '\\.(png|jpg|jpeg|gif|webp|bmp|tif|tiff)$' } |
+         Select-Object -First 1
+    if (-not $f) { 'NONE'; exit }
+    $item = Get-Item -LiteralPath $f
+    if ($item.Extension -match '^\\.(png|jpg|jpeg|gif|webp)$' -and $item.Length -le ${MAX_IMAGE_BYTES}) {
+        "FILE|$($item.FullName)|0|0"
+    } else {
+        $img = [System.Drawing.Image]::FromFile($item.FullName)
+        $r = Save-Scaled $img $Out
+        $img.Dispose()
+        "IMAGE|$($r[0])|$($r[1])|$($r[2])"
+    }
+} else {
+    'NONE'
+}`;
+
+function sniffMediaType(buf: Buffer): string | null {
+    if (buf.length >= 8 && buf.toString('latin1', 0, 8) === '\x89PNG\r\n\x1a\n') return 'image/png';
+    if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'image/jpeg';
+    if (buf.length >= 6 && buf.toString('latin1', 0, 6).match(/^GIF8[79]a$/)) return 'image/gif';
+    if (buf.length >= 12 && buf.toString('latin1', 0, 4) === 'RIFF'
+        && buf.toString('latin1', 8, 12) === 'WEBP') return 'image/webp';
+    return null;
+}
+
+function loadImageFile(file: string, width?: number, height?: number, source?: string): ClipboardImage | null {
+    const buf = fs.readFileSync(file);
+    const mediaType = sniffMediaType(buf);
+    if (!mediaType) return null;
+    if (buf.length > MAX_IMAGE_BYTES) {
+        throw new Error(`Clipboard image is too large (${(buf.length / 1e6).toFixed(1)}MB); crop or resize it first`);
+    }
+    return {
+        base64: buf.toString('base64'),
+        mediaType,
+        bytes: buf.length,
+        width: width || undefined,
+        height: height || undefined,
+        source
+    };
+}
+
+/**
+ * Read an image from the clipboard (bitmap, or a copied image file).
+ * Returns null when the clipboard holds no image or the platform has no
+ * helper available. Windows is fully supported; macOS needs `pngpaste`
+ * and Linux needs `xclip` or `wl-paste`.
+ */
+export function readClipboardImage(): ClipboardImage | null {
+    const tmp = path.join(os.tmpdir(), `gcal-clip-${process.pid}.png`);
+    const cleanup = () => {
+        for (const f of [tmp, tmp.replace(/\.png$/, '.jpg')]) {
+            try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch { /* ignore */ }
+        }
+    };
+
+    try {
+        if (process.platform === 'win32') {
+            const script = path.join(os.tmpdir(), `gcal-clip-${process.pid}.ps1`);
+            fs.writeFileSync(script, WIN_CLIP_IMAGE_PS1, 'utf-8');
+            try {
+                const out = execFileSync('powershell.exe',
+                    ['-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-File', script, tmp],
+                    { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+                const line = out.split(/\r?\n/).filter(Boolean).pop() || 'NONE';
+                const [kind, file, w, h] = line.split('|');
+                if (kind !== 'IMAGE' && kind !== 'FILE') return null;
+                return loadImageFile(file, Number(w), Number(h),
+                    kind === 'FILE' ? path.basename(file) : undefined);
+            } finally {
+                try { fs.unlinkSync(script); } catch { /* ignore */ }
+            }
+        }
+
+        if (process.platform === 'darwin') {
+            // pngpaste exits non-zero when the clipboard has no image.
+            execFileSync('pngpaste', [tmp], { stdio: 'ignore' });
+            return loadImageFile(tmp);
+        }
+
+        // Linux: Wayland first, then X11.
+        for (const [cmd, args] of [
+            ['wl-paste', ['--type', 'image/png']],
+            ['xclip', ['-selection', 'clipboard', '-t', 'image/png', '-o']]
+        ] as [string, string[]][]) {
+            try {
+                const buf = execFileSync(cmd, args, { maxBuffer: 64 * 1024 * 1024 });
+                if (!buf.length) continue;
+                fs.writeFileSync(tmp, buf);
+                return loadImageFile(tmp);
+            } catch { /* try the next tool */ }
+        }
+        return null;
+    } catch (err) {
+        // "too large" is actionable; anything else means no image is available.
+        if (err instanceof Error && err.message.includes('too large')) throw err;
+        return null;
+    } finally {
+        cleanup();
     }
 }
