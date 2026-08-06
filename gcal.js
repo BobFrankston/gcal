@@ -244,7 +244,7 @@ Commands:
   update | edit | set           Change an event's time/title/location/busy/...
   del | delete                  Delete event(s) by ID
   remind                        Add reminder(s) to existing event
-  resched                       Reschedule event
+  resched | reschedule          Reschedule event
   snooze                        Snooze event (default: +1d)
   import                        Import events from ICS file
   calendars | listc | list-calendars   List available calendars
@@ -255,6 +255,11 @@ Commands:
 Global options:
   -u, -user <email>             Set / use default Google account
   -c, -calendar <id>            Calendar ID (default: primary)
+  -n <count>                    Max events to list (default 10)
+  -since <date> / -till <date>  Time window. Commands that look up an event
+                                by ID search 30 days back; -since widens that.
+  -v                            Verbose output
+  -h, -help                     Show help;  -version  show version
 
 Companion tool: gtask  (Google Tasks - shares OAuth with gcal)
 `;
@@ -263,6 +268,9 @@ const USAGE = {
   List upcoming events. Default n=10.
   -since <date>   Start from date (past dates allowed)
   -till <date>    End at date
+  -n <count>      Max events (same as the positional [n])
+  -all            Show every instance of a recurring series (by default
+                  each series is collapsed to its next occurrence)
   -b              Include birthday events (hidden by default)
   -v              Verbose (show full IDs and links)
 
@@ -301,6 +309,10 @@ const USAGE = {
                   (default 1); the event spans that many days.
   -free           Mark the event as Free (does not block time / not busy).
   -busy           Mark the event as Busy (the default).
+  -r <dur>        Add a popup reminder <dur> before the start ("30m", "12h",
+                  "1h30m"). Repeatable for multiple reminders.
+  -rrule <rule>   Make it recurring. Takes an iCalendar RRULE body; the
+                  "RRULE:" prefix is optional. (alias: -rule)
   -open           Open the event in the browser after creating it.
   -clip           Read the event from the clipboard. Text is used when
                   present; otherwise an image on the clipboard (screenshot
@@ -318,6 +330,9 @@ const USAGE = {
     gcal add "Dentist appointment Friday 3pm for 1 hour"
     gcal add -clip                                  (text, or image if none)
     gcal add "Dentist" "Friday 3pm" -r 30m
+    gcal add "Flight" "jul 3 6am" -r 12h -r 1h       (two reminders)
+    gcal add "Statin" "8am" -rrule "FREQ=DAILY"      (recurring)
+    gcal add "Standup" "mon 9am" -rrule "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR"
 `,
     update: `gcal update <id> [options]
        gcal edit <id> ...                      (aliases: edit, set)
@@ -360,7 +375,7 @@ const USAGE = {
     gcal remind abc12345 30m
     gcal remind abc12345 30m 1h
 `,
-    resched: `gcal resched <id> <when> [duration]
+    resched: `gcal resched <id> <when> [duration]      (alias: reschedule)
   Reschedule an event. Preserves duration unless [duration] given.
   If <when> lacks a time-of-day, the original time is preserved.
   <when> may be a range, e.g. "jun 13 1pm to 2:30pm" (sets the new end).
@@ -405,7 +420,8 @@ const HELP_ALIASES = {
     'list-calendars': 'calendars',
     'list-recurring': 'listr',
     'set': 'update',
-    'edit': 'update'
+    'edit': 'update',
+    'reschedule': 'resched'
 };
 function showUsage(cmd) {
     if (cmd)
@@ -1176,6 +1192,8 @@ async function main() {
                 };
                 if (parsed.transparency)
                     event.transparency = parsed.transparency;
+                if (parsed.rrule)
+                    event.recurrence = [`RRULE:${parsed.rrule}`];
                 events.push(event);
                 console.log(`\n  Event: ${extracted.summary}`);
                 console.log(`  When:  ${formatDateTime(event.start)} - ${formatDateTime(event.end)} (${extracted.duration || '1h'})${tz !== localTz ? ` [${tz}]` : ''}`);
