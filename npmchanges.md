@@ -1,1 +1,6 @@
+# npm Publish Changes
+
+## v0.1.78 — 2026-09-11
+
 - Accept -cal as alias for -c/-calendar; document partial-match calendar selection in usage and README (2026-09-11)
+
