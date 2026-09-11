@@ -46,7 +46,7 @@ gcal help <command>        # Detailed help for one command
 | Flag | Description |
 |------|-------------|
 | `-u`, `-user <email>` | Set / use default Google account |
-| `-c`, `-calendar <id>` | Calendar ID (default: primary) |
+| `-c`, `-cal`, `-calendar <name>` | Calendar to use (default: primary). Case-insensitive partial match on calendar name or ID, e.g. `-cal family`; errors if ambiguous |
 | `-n <count>` | Number of events to list |
 | `-v`, `-verbose` | Show event IDs and links |
 | `-b`, `-birthdays` | Include birthday events |

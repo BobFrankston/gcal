@@ -307,7 +307,7 @@ Commands:
 
 Global options:
   -u, -user <email>             Set / use default Google account
-  -c, -calendar <id>            Calendar ID (default: primary)
+  -c, -cal, -calendar <name>    Calendar (default: primary). Partial name match, e.g. -cal family
   -n <count>                    Max events to list (default 10)
   -since <date> / -till <date>  Time window. Commands that look up an event
                                 by ID search 30 days back; -since widens that.
@@ -557,6 +557,7 @@ function parseArgs(argv: string[]): ParsedArgs {
                 result.user = argv[++i] || '';
                 break;
             case '-c':
+            case '-cal':      // 2026-09-11 Claude Code (Fable 5.1), at Bob's direction: accept -cal as alias
             case '-calendar':
             case '--calendar':
                 result.calendar = argv[++i] || 'primary';
