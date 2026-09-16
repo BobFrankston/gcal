@@ -93,10 +93,14 @@ export interface ExtractedEvent {
     timeZone?: string;
     location?: string;
     description?: string;
+    free?: boolean;     /** true when the text says the time is not blocked (free/tentative/optional/FYI) */
 }
 
 // NOTE: rmfmail's New-event dialog uses this same prompt (mailx-service
 // extractEventGcalStyle) — keep the two in sync when editing.
+// 2026-09-16 — Claude Code (Fable 5.1), at Bob's direction: added the optional
+// "free" field so the text can mark an event as not busy. rmfmail's copy NOT
+// updated here (outside this tree); sync it there when convenient.
 const EVENT_EXTRACTION_PROMPT = `Extract calendar event details from the user's text and return ONLY valid JSON.
 
 Today's date is {{TODAY}} and the current local time is {{NOW}}. The user's local timezone is {{TIMEZONE}}.
@@ -111,7 +115,8 @@ Output format:
     "duration": "1h",
     "timeZone": "IANA timezone",
     "location": "optional location",
-    "description": "optional description"
+    "description": "optional description",
+    "free": false
   }
 ]
 
@@ -123,6 +128,7 @@ Rules:
 - timeZone: IANA timezone (e.g. "America/New_York"). If the text explicitly states a timezone — a zone name, abbreviation, UTC offset, or a parenthetical like "(Malaysia Time - Kuala Lumpur)" as in Google Calendar invitation emails — use that zone, and give startDateTime as the wall-clock time IN THAT ZONE (do not convert to the user's timezone). Otherwise infer from the event's location if it is clearly in a different timezone than the user. Default to the user's local timezone only when nothing indicates one.
 - location: include if mentioned, omit if not
 - description: include extra details if any, omit if none
+- free: true ONLY if the text says the time should not be blocked — e.g. "free", "not busy", "show as free", "tentative", "optional", "FYI", "no need to attend", "hold" / "placeholder", "available". Otherwise omit it or set false (the event blocks the time as busy)
 - Return ONLY the JSON array, no markdown, no explanation`;
 
 /** Appended to the system prompt when the input is an image rather than text. */

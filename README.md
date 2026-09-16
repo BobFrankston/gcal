@@ -94,7 +94,13 @@ Windows works out of the box. macOS needs [`pngpaste`](https://github.com/jcsalt
 
 ### Conflict / proximity warnings
 
-When adding or rescheduling a timed event, `gcal` prints a warning for any existing event that **overlaps** the new slot or falls within **1 hour before or after** it. In AI-mode `add`, warnings appear before the confirmation prompt so you can cancel. Warnings are informational only — the event is still created.
+When adding or rescheduling a timed event, `gcal` prints a warning for any existing event that **overlaps** the new slot or falls within **1 hour before or after** it. An overlapping event that is itself marked free is listed with "(free)".
+
+On `add`, a real conflict — the new event is busy and it overlaps an existing busy event — asks **"Create anyway? [y/N]"**. The default is No and the 60-second auto-yes does not apply. A `-free` event never asks. On `update` and `resched` the warnings are informational only.
+
+### Busy vs free
+
+New events show as **busy** unless you pass `-free`, or (in AI mode) the text says so — "free", "not busy", "tentative", "optional", "FYI", "hold", and the like set the event to free. `-free`/`-busy` on the command line always win over the text.
 
 ### Reschedule / snooze notes
 

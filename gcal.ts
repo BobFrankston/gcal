@@ -143,27 +143,40 @@ async function patchEvent(
     return await res.json() as GoogleEvent;
 }
 
-/** Print warnings for events that overlap or fall within 1 hour of [start, end]. */
+/**
+ * Print warnings for events that overlap or fall within 1 hour of [start, end].
+ * Returns the number of existing BUSY events that overlap the slot (a free
+ * existing event is listed but does not count as a conflict).
+ *
+ * 2026-09-16 — Claude Code (Fable 5.1), at Bob's direction: was fire-and-forget
+ * (Promise<void>); now returns the busy-overlap count so `add` can ask before
+ * double-booking. Free existing events are labelled "(free)" and not counted.
+ */
 async function checkProximity(
     accessToken: string,
     calendarId: string,
     start: Date,
     end: Date,
     excludeBaseId?: string
-): Promise<void> {
+): Promise<number> {
     const HOUR = 60 * 60_000;
     const windowMin = new Date(start.getTime() - HOUR).toISOString();
     const windowMax = new Date(end.getTime() + HOUR).toISOString();
     let nearby: GoogleEvent[];
     try {
         nearby = await listEvents(accessToken, calendarId, 50, windowMin, windowMax);
-    } catch {
-        return;  // Non-fatal — skip warning on fetch failure
+    } catch (error: any) {
+        // Justified swallow: the conflict check is advisory; the add itself still
+        // proceeds and any real API problem will surface there. Say so, so a
+        // silent "no conflicts" is never mistaken for a verified one.
+        console.log(`\nWarning: could not check for conflicts (${error?.message ?? error})`);
+        return 0;
     }
 
     const sMs = start.getTime();
     const eMs = end.getTime();
     const warnings: string[] = [];
+    let busyOverlaps = 0;
 
     for (const e of nearby) {
         if (e.eventType === 'birthday') continue;
@@ -187,7 +200,12 @@ async function checkProximity(
         const when = formatDateTime(e.start);
 
         if (evStart < eMs && evEnd > sMs) {
-            warnings.push(`  OVERLAPS:    ${when}  ${summary}`);
+            if (e.transparency === 'transparent') {
+                warnings.push(`  OVERLAPS:    ${when}  ${summary} (free)`);
+            } else {
+                busyOverlaps++;
+                warnings.push(`  OVERLAPS:    ${when}  ${summary}`);
+            }
         } else if (evEnd <= sMs && sMs - evEnd <= HOUR) {
             const mins = Math.round((sMs - evEnd) / 60_000);
             warnings.push(`  ${String(mins).padStart(2)}m before:   ${when}  ${summary}`);
@@ -201,6 +219,19 @@ async function checkProximity(
         console.log(`\nWarning: nearby events:`);
         for (const w of warnings) console.log(w);
     }
+    return busyOverlaps;
+}
+
+/**
+ * Ask a yes/no question that defaults to NO. Used when creating an event would
+ * double-book a busy slot: no auto-yes timer, an empty answer means cancel.
+ * 2026-09-16 — Claude Code (Fable 5.1), at Bob's direction.
+ */
+async function confirmDefaultNo(question: string): Promise<boolean> {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    const answer = (await rl.question(question)).trim().toLowerCase();
+    rl.close();
+    return answer === 'y' || answer === 'yes';
 }
 
 async function importIcsFile(
@@ -362,7 +393,11 @@ const USAGE: Record<string, string> = {
   -allday         Create an all-day event. The third arg is a day count
                   (default 1); the event spans that many days.
   -free           Mark the event as Free (does not block time / not busy).
-  -busy           Mark the event as Busy (the default).
+  -busy           Mark the event as Busy (the default). In AI mode the text
+                  can also say it ("free", "tentative", "optional", "FYI").
+  Conflicts: existing events that overlap or fall within 1h are listed. If a
+  busy event would overlap an existing busy one, you are asked to confirm
+  (default No, no auto-yes). A -free event never asks.
   -r <dur>        Add a popup reminder <dur> before the start ("30m", "12h",
                   "1h30m"). Repeatable for multiple reminders.
   -rrule <rule>   Make it recurring. Takes an iCalendar RRULE body; the
@@ -1196,18 +1231,29 @@ async function main(): Promise<void> {
                     event.start = { dateTime: startTime.toISOString(), timeZone: tz };
                     event.end = { dateTime: endTime.toISOString(), timeZone: tz };
                 }
-                if (parsed.transparency) event.transparency = parsed.transparency;
+                // 2026-09-16 — Claude Code (Fable 5.1), at Bob's direction: busy is the
+                // explicit default (was left unset, so Google/calendar defaults decided).
+                event.transparency = parsed.transparency || 'opaque';
                 if (parsed.rrule) event.recurrence = [`RRULE:${parsed.rrule}`];
 
                 const token = await getAccessToken(user, true);
                 if (!parsed.allDay) {
-                    await checkProximity(token, parsed.calendar,
-                        new Date(event.start.dateTime!), new Date(event.end.dateTime!));
+                    const conflicts = await checkProximity(token, parsed.calendar,
+                        new Date(event.start.dateTime), new Date(event.end.dateTime));
+                    // A free event can sit on top of a busy one; only busy-on-busy asks.
+                    if (conflicts > 0 && event.transparency === 'opaque') {
+                        const ok = await confirmDefaultNo(
+                            `\n${conflicts} busy event${conflicts > 1 ? 's' : ''} overlap${conflicts > 1 ? '' : 's'} "${title}". Create anyway? [y/N] `);
+                        if (!ok) {
+                            console.log('Cancelled.');
+                            break;
+                        }
+                    }
                 }
                 const created = await createEvent(token, event, parsed.calendar);
                 console.log(`\nEvent created: ${created.summary}`);
                 console.log(`  When: ${formatDateTime(created.start)} - ${formatDateTime(created.end)}`);
-                if (created.transparency === 'transparent') console.log(`  Free (not busy)`);
+                console.log(`  Shows as: ${created.transparency === 'transparent' ? 'free' : 'busy'}`);
                 if (created.htmlLink) {
                     console.log(`  Link: ${created.htmlLink}`);
                 }
@@ -1274,6 +1320,7 @@ async function main(): Promise<void> {
             const localTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
             const token = await getAccessToken(user, true);
             const events: GoogleEvent[] = [];
+            let busyConflicts = 0;
             for (const extracted of extractedEvents) {
                 const tz = extracted.timeZone || localTz;
                 const startDt = extracted.startDateTime;
@@ -1294,7 +1341,9 @@ async function main(): Promise<void> {
                     description: extracted.description,
                     reminders: buildReminders(parsed.reminders)
                 };
-                if (parsed.transparency) event.transparency = parsed.transparency;
+                // 2026-09-16 — Claude Code (Fable 5.1), at Bob's direction: -free/-busy
+                // wins; otherwise the text decides (extracted.free); otherwise busy.
+                event.transparency = parsed.transparency || (extracted.free ? 'transparent' : 'opaque');
                 if (parsed.rrule) event.recurrence = [`RRULE:${parsed.rrule}`];
                 events.push(event);
 
@@ -1302,9 +1351,11 @@ async function main(): Promise<void> {
                 console.log(`  When:  ${formatDateTime(event.start)} - ${formatDateTime(event.end)} (${extracted.duration || '1h'})${tz !== localTz ? ` [${tz}]` : ''}`);
                 if (extracted.location) console.log(`  Where: ${extracted.location}`);
                 if (extracted.description) console.log(`  Note:  ${extracted.description}`);
+                console.log(`  Shows as: ${event.transparency === 'transparent' ? 'free' : 'busy'}`);
 
-                await checkProximity(token, parsed.calendar,
+                const conflicts = await checkProximity(token, parsed.calendar,
                     zonedWallClockToDate(startDt, tz), zonedWallClockToDate(endDt, tz));
+                if (event.transparency === 'opaque') busyConflicts += conflicts;
             }
 
             if (events.length === 0) {
@@ -1312,25 +1363,38 @@ async function main(): Promise<void> {
                 process.exit(1);
             }
 
-            const prompt = events.length === 1
-                ? '\nCreate this event? [Y/n] (auto-yes in 60s) '
-                : `\nCreate ${events.length} events? [Y/n] (auto-yes in 60s) `;
-            const rl2 = createInterface({ input: process.stdin, output: process.stdout });
-            let timeoutId: NodeJS.Timeout | undefined;
-            const confirm = await Promise.race([
-                rl2.question(prompt).then(s => s.trim().toLowerCase()),
-                new Promise<string>(resolve => {
-                    timeoutId = setTimeout(() => {
-                        console.log('\nNo response — creating event(s).');
-                        resolve('');
-                    }, 60_000);
-                })
-            ]);
-            if (timeoutId) clearTimeout(timeoutId);
-            rl2.close();
-            if (confirm && confirm !== 'y' && confirm !== 'yes') {
-                console.log('Cancelled.');
-                break;
+            // 2026-09-16 — Claude Code (Fable 5.1), at Bob's direction: when a busy
+            // event would double-book a busy slot, the prompt defaults to NO and the
+            // 60s auto-yes is off. The auto-yes only applies to a conflict-free add.
+            if (busyConflicts > 0) {
+                const what = events.length === 1 ? 'this event' : `these ${events.length} events`;
+                const ok = await confirmDefaultNo(
+                    `\n${busyConflicts} busy conflict${busyConflicts > 1 ? 's' : ''} found. Create ${what} anyway? [y/N] `);
+                if (!ok) {
+                    console.log('Cancelled.');
+                    break;
+                }
+            } else {
+                const prompt = events.length === 1
+                    ? '\nCreate this event? [Y/n] (auto-yes in 60s) '
+                    : `\nCreate ${events.length} events? [Y/n] (auto-yes in 60s) `;
+                const rl2 = createInterface({ input: process.stdin, output: process.stdout });
+                let timeoutId: NodeJS.Timeout | undefined;
+                const confirm = await Promise.race([
+                    rl2.question(prompt).then(s => s.trim().toLowerCase()),
+                    new Promise<string>(resolve => {
+                        timeoutId = setTimeout(() => {
+                            console.log('\nNo response — creating event(s).');
+                            resolve('');
+                        }, 60_000);
+                    })
+                ]);
+                if (timeoutId) clearTimeout(timeoutId);
+                rl2.close();
+                if (confirm && confirm !== 'y' && confirm !== 'yes') {
+                    console.log('Cancelled.');
+                    break;
+                }
             }
 
             for (const event of events) {
