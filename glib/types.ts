@@ -50,7 +50,18 @@ export interface GoogleEvent {
         title?: string;
     };
     attachments?: EventAttachment[];
-    eventType?: string;
+    eventType?: string;  /** 'default' | 'birthday' | 'focusTime' | 'fromGmail' | 'outOfOffice' | 'workingLocation' */
+    // 2026-09-21 — Claude Code (Fable 5.1), at Bob's direction: birthday events
+    // (eventType 'birthday') carry this block. `contact` is set only on the ones
+    // Google derives from a contact; API-created ones have type 'birthday' alone.
+    birthdayProperties?: BirthdayProperties;
+}
+
+/** Birthday / special-event data; used when eventType is 'birthday'. Immutable after creation. */
+export interface BirthdayProperties {
+    contact?: string;         /** "people/c12345" — linked contact (read-only) */
+    type?: 'anniversary' | 'birthday' | 'custom' | 'other' | 'self';  /** Only 'birthday' can be created via the API */
+    customTypeName?: string;  /** Label when type is 'custom' (read-only) */
 }
 
 export interface EventDateTime {

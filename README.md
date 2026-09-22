@@ -49,7 +49,7 @@ gcal help <command>        # Detailed help for one command
 | `-c`, `-cal`, `-calendar <name>` | Calendar to use (default: primary). Case-insensitive partial match on calendar name or ID, e.g. `-cal family`; errors if ambiguous |
 | `-n <count>` | Number of events to list |
 | `-v`, `-verbose` | Show event IDs and links |
-| `-b`, `-birthdays` | Include birthday events |
+| `-b`, `-birthday` | Birthdays: include them in `list`/`del`; on `add`, create a birthday event (see below) |
 | `-clip` | Read from clipboard — text, or an image if there is no text (for `add`) |
 | `-r`, `-reminder <dur>` | Add popup reminder (e.g. `30m`, `1h`); repeatable |
 | `-since <date>` | Start listing from `<date>` |
@@ -69,6 +69,8 @@ gcal add "Lunch" "1/14/2026 12:00" "1h"
 gcal add "Dentist appointment Friday 3pm for 1 hour"
 gcal add -clip
 gcal add "Dentist" "Friday 3pm" -r 30m
+gcal add "Ann's birthday" "mar 5" -birthday
+gcal add "Ann's birthday is March 5"
 gcal show abc12345
 gcal show abc12345 -json
 gcal remind abc12345 30m
@@ -101,6 +103,14 @@ On `add`, a real conflict — the new event is busy and it overlaps an existing 
 ### Busy vs free
 
 New events show as **busy** unless you pass `-free`, or (in AI mode) the text says so — "free", "not busy", "tentative", "optional", "FYI", "hold", and the like set the event to free. `-free`/`-busy` on the command line always win over the text.
+
+### Birthdays
+
+`gcal add "<title>" "<date>" -birthday` creates a real Google **birthday event** (`eventType: birthday`) rather than a plain event with "birthday" in the title. Google files it under its Birthdays layer, repeats it every year (a February 29 birthday falls on the last day of February), shows it as free, and keeps it private. Only the title, the date and `-r` reminders apply; `-rrule`, `-busy`, a duration/day count, `-loc` and `-note` are rejected. In AI mode the text itself decides: "Ann's birthday is March 5" or "Joe was born 1950-03-05" becomes a birthday (a birthday *party* at a given time stays an ordinary timed event); `-birthday` forces it.
+
+`list` hides birthdays unless you pass `-b`/`-birthday`. Shown birthdays are tagged `[birthday]`, or `[birthday, from contact]` for the ones Google derives from your contacts. `del` needs `-b` too, as a guard.
+
+Google's timing rules: the date of a birthday linked to a contact cannot be changed through the API; only its title, color and reminders can.
 
 ### Reschedule / snooze notes
 

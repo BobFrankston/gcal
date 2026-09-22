@@ -94,10 +94,14 @@ export interface ExtractedEvent {
     location?: string;
     description?: string;
     free?: boolean;     /** true when the text says the time is not blocked (free/tentative/optional/FYI) */
+    birthday?: boolean; /** true when the text gives someone's birthday (a yearly date, not a party) */
 }
 
 // NOTE: rmfmail's New-event dialog uses this same prompt (mailx-service
 // extractEventGcalStyle) — keep the two in sync when editing.
+// 2026-09-21 — Claude Code (Fable 5.1), at Bob's direction: added the optional
+// "birthday" field so "Ann's birthday is March 5" becomes a Google birthday
+// event (yearly, all-day) rather than a 1h appointment. rmfmail's copy NOT synced.
 // 2026-09-16 — Claude Code (Fable 5.1), at Bob's direction: added the optional
 // "free" field so the text can mark an event as not busy. rmfmail's copy NOT
 // updated here (outside this tree); sync it there when convenient.
@@ -116,7 +120,8 @@ Output format:
     "timeZone": "IANA timezone",
     "location": "optional location",
     "description": "optional description",
-    "free": false
+    "free": false,
+    "birthday": false
   }
 ]
 
@@ -129,6 +134,7 @@ Rules:
 - location: include if mentioned, omit if not
 - description: include extra details if any, omit if none
 - free: true ONLY if the text says the time should not be blocked — e.g. "free", "not busy", "show as free", "tentative", "optional", "FYI", "no need to attend", "hold" / "placeholder", "available". Otherwise omit it or set false (the event blocks the time as busy)
+- birthday: true when the text records someone's birthday (or "born on") as a date to remember every year — e.g. "Ann's birthday is March 5", "Joe was born 1950-03-05". Then summary is "<Name>'s birthday", startDateTime is that date (use the birth year if given, else the next occurrence) at 00:00:00, and duration is "1d". A birthday PARTY or dinner at a given time is an ordinary timed event, not a birthday
 - Return ONLY the JSON array, no markdown, no explanation`;
 
 /** Appended to the system prompt when the input is an image rather than text. */

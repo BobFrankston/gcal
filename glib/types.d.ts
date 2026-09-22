@@ -49,7 +49,14 @@ export interface GoogleEvent {
         title?: string;
     };
     attachments?: EventAttachment[];
-    eventType?: string;
+    eventType?: string; /** 'default' | 'birthday' | 'focusTime' | 'fromGmail' | 'outOfOffice' | 'workingLocation' */
+    birthdayProperties?: BirthdayProperties;
+}
+/** Birthday / special-event data; used when eventType is 'birthday'. Immutable after creation. */
+export interface BirthdayProperties {
+    contact?: string; /** "people/c12345" — linked contact (read-only) */
+    type?: 'anniversary' | 'birthday' | 'custom' | 'other' | 'self'; /** Only 'birthday' can be created via the API */
+    customTypeName?: string; /** Label when type is 'custom' (read-only) */
 }
 export interface EventDateTime {
     date?: string; /** Date in YYYY-MM-DD format (all-day event) */

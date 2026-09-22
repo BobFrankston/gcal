@@ -342,6 +342,7 @@ Global options:
   -n <count>                    Max events to list (default 10)
   -since <date> / -till <date>  Time window. Commands that look up an event
                                 by ID search 30 days back; -since widens that.
+  -b, -birthday                 Birthdays: include them in list/del; on add, create one
   -v                            Verbose output
   -h, -help                     Show help;  -version  show version
 
@@ -356,7 +357,7 @@ const USAGE: Record<string, string> = {
   -n <count>      Max events (same as the positional [n])
   -all            Show every instance of a recurring series (by default
                   each series is collapsed to its next occurrence)
-  -b              Include birthday events (hidden by default)
+  -b, -birthday   Include birthday events (hidden by default)
   -v              Verbose (show full IDs and links)
 
   Examples:
@@ -392,6 +393,11 @@ const USAGE: Record<string, string> = {
 
   -allday         Create an all-day event. The third arg is a day count
                   (default 1); the event spans that many days.
+  -birthday       Create a Google birthday event (all-day, repeats yearly,
+                  shows as free, filed under Google's Birthdays layer). Only
+                  the title, the date and -r reminders apply; no duration,
+                  -rrule, -busy, location or note. In AI mode the text
+                  saying "birthday" does the same thing. (alias: -b)
   -free           Mark the event as Free (does not block time / not busy).
   -busy           Mark the event as Busy (the default). In AI mode the text
                   can also say it ("free", "tentative", "optional", "FYI").
@@ -416,6 +422,8 @@ const USAGE: Record<string, string> = {
     gcal add "Vacation" "jul 1" -allday              (1 day, all-day)
     gcal add "Conference" "jul 1" 3 -allday          (3-day all-day event)
     gcal add "Out of office" "jul 1" -allday -free   (all-day, not busy)
+    gcal add "Ann's birthday" "mar 5" -birthday      (yearly birthday)
+    gcal add "Ann's birthday is March 5"             (AI mode, same result)
     gcal add "Dentist appointment Friday 3pm for 1 hour"
     gcal add -clip                                  (text, or image if none)
     gcal add "Dentist" "Friday 3pm" -r 30m
@@ -452,7 +460,7 @@ const USAGE: Record<string, string> = {
        gcal delete <id> [id2...]
   Delete event(s) by ID prefix. Searches up to 30 days back; widen with -since.
   -all            Delete entire recurring series (not just instance)
-  -b              Allow deletion of birthday events
+  -b, -birthday   Allow deletion of birthday events
 `,
     delete: `gcal delete <id> [id2...] [-all]
   Alias for "del".
@@ -535,7 +543,7 @@ interface ParsedArgs {
     help: boolean;
     verbose: boolean;
     icsFile: string;  /** Direct .ics file path */
-    birthdays: boolean;
+    birthdays: boolean;    /** -b/-birthday: list/del include birthdays; add creates a birthday event */
     clip: boolean;
     all: boolean;
     json: boolean;
@@ -606,6 +614,8 @@ function parseArgs(argv: string[]): ParsedArgs {
                 result.verbose = true;
                 break;
             case '-b':
+            case '-birthday':   // 2026-09-21 Claude Code (Fable 5.1), at Bob's direction: one flag —
+            case '--birthday':  // list/del: include birthdays; add: create a birthday event
             case '-birthdays':
             case '--birthdays':
                 result.birthdays = true;
@@ -757,6 +767,59 @@ function buildReminders(minutes: number[]): GoogleEvent['reminders'] | undefined
         useDefault: false,
         overrides: minutes.map(m => ({ method: 'popup' as const, minutes: m }))
     };
+}
+
+// 2026-09-21 — Claude Code (Fable 5.1), at Bob's direction: birthdays used to be
+// ordinary events with "birthday" in the title. Google has a real event type for
+// them, which files the event under its Birthdays layer and repeats it yearly.
+// The API's rules for eventType 'birthday' (event-types guide, read 2026-09-21):
+// all-day spanning exactly one day, RRULE:FREQ=YEARLY (Feb 29 needs
+// BYMONTH=2;BYMONTHDAY=-1), visibility private, transparency transparent,
+// birthdayProperties.type 'birthday', and no other properties except colorId,
+// summary and reminders. Both add modes build the event through this one function.
+/**
+ * Build a Google birthday event for the given calendar day.
+ * @param title - Event summary, e.g. "Ann's birthday"
+ * @param day - The birthday (local date; the year is kept, so a birth year gives the first occurrence)
+ * @param reminderMinutes - Popup reminders, minutes before the (all-day) start
+ */
+function makeBirthdayEvent(title: string, day: Date, reminderMinutes: number[]): GoogleEvent {
+    const startD = new Date(day);
+    startD.setHours(0, 0, 0, 0);
+    const endD = new Date(startD);
+    endD.setDate(endD.getDate() + 1);   // end.date is exclusive
+    const isLeapDay = startD.getMonth() === 1 && startD.getDate() === 29;
+    return {
+        summary: title,
+        eventType: 'birthday',
+        birthdayProperties: { type: 'birthday' },
+        start: { date: formatYMD(startD) },
+        end: { date: formatYMD(endD) },
+        recurrence: [isLeapDay ? 'RRULE:FREQ=YEARLY;BYMONTH=2;BYMONTHDAY=-1' : 'RRULE:FREQ=YEARLY'],
+        visibility: 'private',
+        transparency: 'transparent',
+        reminders: buildReminders(reminderMinutes)
+    };
+}
+
+/** Print the result of creating a birthday event (shared by explicit and AI add). */
+function reportCreatedBirthday(created: GoogleEvent, open: boolean): void {
+    console.log(`\nBirthday created: ${created.summary}`);
+    console.log(`  When: ${formatDateTime(created.start)}, every year (Google Birthdays)`);
+    if (created.htmlLink) console.log(`  Link: ${created.htmlLink}`);
+    if (open && created.htmlLink) openUrl(created.htmlLink);
+}
+
+/** Options that a birthday event cannot carry; -birthday with any of these is an error. */
+function rejectBirthdayConflicts(parsed: ParsedArgs): void {
+    const bad: string[] = [];
+    if (parsed.rrule) bad.push('-rrule (birthdays always repeat yearly)');
+    if (parsed.transparency === 'opaque') bad.push('-busy (Google shows birthdays as free)');
+    if (parsed.setLoc !== undefined) bad.push('-loc');
+    if (parsed.setNote !== undefined) bad.push('-note');
+    if (bad.length === 0) return;
+    console.error(`-birthday cannot be combined with: ${bad.join(', ')}`);
+    process.exit(1);
 }
 
 /** Compute a start/end patch for moving and/or resizing an event.
@@ -1162,8 +1225,13 @@ async function main(): Promise<void> {
                     const shortId = (event.id || '').slice(0, 8);
                     const start = event.start ? formatDateTime(event.start) : '?';
                     const duration = (event.start && event.end) ? formatDuration(event.start, event.end) : '';
+                    // 2026-09-21 — Claude Code (Fable 5.1), at Bob's direction: birthdays
+                    // gcal creates itself are not from a contact; only the contact-linked
+                    // ones (birthdayProperties.contact set) say so.
+                    const bdayTag = event.eventType !== 'birthday' ? ''
+                        : event.birthdayProperties?.contact ? ' [birthday, from contact]' : ' [birthday]';
                     const summary = (event.summary || '(no title)')
-                        + (event.eventType === 'birthday' ? ' [from contact]' : '')
+                        + bdayTag
                         + (event.recurringEventId ? ' [recurring]' : '');
                     const loc = event.location || '';
                     if (parsed.verbose) {
@@ -1205,6 +1273,20 @@ async function main(): Promise<void> {
                 if (rangeEnd && third) {
                     console.error('Specify either a time range or a [duration], not both.');
                     process.exit(1);
+                }
+
+                // 2026-09-21 — Claude Code (Fable 5.1), at Bob's direction: -birthday
+                // makes a Google birthday event. No conflict check: it is all-day and free.
+                if (parsed.birthdays) {
+                    rejectBirthdayConflicts(parsed);
+                    if (rangeEnd || (third && third !== '1')) {
+                        console.error('A birthday is a single day: give just <title> <date>.');
+                        process.exit(1);
+                    }
+                    const token = await getAccessToken(user, true);
+                    const created = await createEvent(token, makeBirthdayEvent(title, startTime, parsed.reminders), parsed.calendar);
+                    reportCreatedBirthday(created, parsed.open);
+                    break;
                 }
 
                 const event: GoogleEvent = {
@@ -1317,6 +1399,7 @@ async function main(): Promise<void> {
                 process.exit(1);
             }
 
+            if (parsed.birthdays) rejectBirthdayConflicts(parsed);
             const localTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
             const token = await getAccessToken(user, true);
             const events: GoogleEvent[] = [];
@@ -1326,6 +1409,18 @@ async function main(): Promise<void> {
                 const startDt = extracted.startDateTime;
                 if (isNaN(new Date(startDt).getTime())) {
                     console.error(`AI returned invalid date: ${startDt} — skipping`);
+                    continue;
+                }
+
+                // 2026-09-21 — Claude Code (Fable 5.1), at Bob's direction: -birthday, or
+                // the text itself being a birthday, makes a Google birthday event from the
+                // date part alone. Skips the conflict check (all-day, free).
+                if (parsed.birthdays || extracted.birthday) {
+                    const [y, m, d] = startDt.slice(0, 10).split('-').map(Number);
+                    const bday = makeBirthdayEvent(extracted.summary, new Date(y, m - 1, d), parsed.reminders);
+                    events.push(bday);
+                    console.log(`\n  Birthday: ${extracted.summary}`);
+                    console.log(`  When:     ${formatDateTime(bday.start)}, every year`);
                     continue;
                 }
                 const durationMins = parseDuration(extracted.duration || '1h');
@@ -1399,6 +1494,10 @@ async function main(): Promise<void> {
 
             for (const event of events) {
                 const created = await createEvent(token, event, parsed.calendar);
+                if (created.eventType === 'birthday') {
+                    reportCreatedBirthday(created, parsed.open);
+                    continue;
+                }
                 console.log(`\nEvent created: ${created.summary}`);
                 console.log(`  When: ${formatDateTime(created.start)} - ${formatDateTime(created.end)}`);
                 if (created.htmlLink) {
