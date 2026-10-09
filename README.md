@@ -29,6 +29,7 @@ gcal help <command>        # Detailed help for one command
 | `list [n]` | List upcoming n events (default: 10) |
 | `show <id>` | Show full details for an event (`-json` for raw JSON) |
 | `add <title> <when> [duration]` | Add event (explicit) |
+| `add <title> <date> [days] -allday` | Add all-day event spanning `[days]` (default 1) |
 | `add "<free text>"` | Add event (AI-parsed) |
 | `add -clip` | Add event from clipboard text — or image, if there is no text (AI-parsed) |
 | `add` | Add event interactively |
@@ -49,7 +50,7 @@ gcal help <command>        # Detailed help for one command
 | `-c`, `-cal`, `-calendar <name>` | Calendar to use (default: primary). Case-insensitive partial match on calendar name or ID, e.g. `-cal family`; errors if ambiguous |
 | `-n <count>` | Number of events to list |
 | `-v`, `-verbose` | Show event IDs and links |
-| `-b`, `-birthday` | Birthdays: include them in `list`/`del`; on `add`, create a birthday event (see below) |
+| `-b`, `-birthday` | Birthdays: include them in `list`/`del`; on `add`, print a Google Contacts link for the person (see below) |
 | `-clip` | Read from clipboard — text, or an image if there is no text (for `add`) |
 | `-r`, `-reminder <dur>` | Add popup reminder (e.g. `30m`, `1h`); repeatable |
 | `-since <date>` | Start listing from `<date>` |
@@ -69,8 +70,8 @@ gcal add "Lunch" "1/14/2026 12:00" "1h"
 gcal add "Dentist appointment Friday 3pm for 1 hour"
 gcal add -clip
 gcal add "Dentist" "Friday 3pm" -r 30m
-gcal add "Ann's birthday" "mar 5" -birthday
-gcal add "Ann's birthday is March 5"
+gcal add "Ann Smith" "mar 5 1950" -birthday
+gcal add "Ann Smith's birthday is March 5"
 gcal show abc12345
 gcal show abc12345 -json
 gcal remind abc12345 30m
@@ -106,11 +107,11 @@ New events show as **busy** unless you pass `-free`, or (in AI mode) the text sa
 
 ### Birthdays
 
-`gcal add "<title>" "<date>" -birthday` creates a real Google **birthday event** (`eventType: birthday`) rather than a plain event with "birthday" in the title. Google files it under its Birthdays layer, repeats it every year (a February 29 birthday falls on the last day of February), shows it as free, and keeps it private. Only the title, the date and `-r` reminders apply; `-rrule`, `-busy`, a duration/day count, `-loc` and `-note` are rejected. In AI mode the text itself decides: "Ann's birthday is March 5" or "Joe was born 1950-03-05" becomes a birthday (a birthday *party* at a given time stays an ordinary timed event); `-birthday` forces it.
+A birthday belongs on the person, not on the calendar: Google Calendar shows contact birthdays in its Birthdays layer by itself (when "Birthdays from contacts" is on in Calendar's settings). So `gcal add "<name>" "<date>" -birthday` writes nothing. It prints the date to enter and a clickable Google Contacts search link for the name, e.g. `https://contacts.google.com/search/Ann%20Smith`; you pick the person there and add the birthday. `-open` opens the link. The first argument is the person's name; "Ann Smith's birthday" is accepted and the suffix dropped. A 4-digit year in the date ("mar 5 1950") is shown as the birth year. In AI mode the text decides: "Ann Smith's birthday is March 5" or "Joe Jones was born 1950-03-05" is a birthday (a birthday *party* at a given time stays an ordinary timed event); `-birthday` forces it. `-r`, `-rrule`, `-busy`, `-cal`, a duration/day count, `-loc` and `-note` are rejected with `-birthday`.
 
-`list` hides birthdays unless you pass `-b`/`-birthday`. Shown birthdays are tagged `[birthday]`, or `[birthday, from contact]` for the ones Google derives from your contacts. `del` needs `-b` too, as a guard.
+`list` hides birthdays unless you pass `-b`/`-birthday`. Shown birthdays are tagged `[birthday, from contact]` (the normal case) or `[birthday]` for standalone birthday events made elsewhere. `del` needs `-b` too, as a guard, and refuses a contact-derived birthday: it prints the contact's link (`-open` opens it) so you remove the birthday there, and the calendar entry goes with it.
 
-Google's timing rules: the date of a birthday linked to a contact cannot be changed through the API; only its title, color and reminders can.
+Before 2026-09-22 `-birthday` created a standalone Calendar birthday event (`eventType: birthday`) instead; those were unlinked from the person and are no longer made.
 
 ### Reschedule / snooze notes
 

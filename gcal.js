@@ -261,23 +261,41 @@ async function importIcsFile(filePath, accessToken, calendarId = 'primary') {
     }
     return result;
 }
+// 2026-10-09 — Claude Code (Opus 5.5), at Bob's direction.
+// The Commands list showed bare command names, so per-command flags such as
+// -allday were invisible unless you already knew to run `gcal help add`. Each
+// command now shows its arguments and main flags; `gcal help <cmd>` keeps the
+// full option text and examples.
 const USAGE_SUMMARY = `gcal v${VERSION} - Google Calendar CLI
 
 Usage: gcal <file.ics>                Import ICS file (file association)
        gcal <command> [options]       Run command
-       gcal help <command>            Detailed help for a command
+       gcal help <command>            Full options and examples for a command
 
 Commands:
-  list                          List upcoming events
-  show                          Show full details for an event (-json for JSON)
-  open                          Open event in browser
-  add                           Add event (explicit, AI, or interactive)
-  update | edit | set           Change an event's time/title/location/busy/...
-  del | delete                  Delete event(s) by ID
-  remind                        Add reminder(s) to existing event
-  resched | reschedule          Reschedule event
-  snooze                        Snooze event (default: +1d)
-  import                        Import events from ICS file
+  list [n]                      List upcoming events (default 10)
+                                  -since <date> -till <date> -all (every instance) -b -v
+  show <id> [-json]             Show full details for an event
+  open <id>                     Open event in browser
+  add <title> <when> [dur]      Add a timed event (default 1h); <when> may be a
+                                  range: "jun 13 1pm to 2:30pm"
+  add <title> <date> [days] -allday   Add an all-day event spanning [days] (default 1)
+  add "<free text>"             Add event, AI-parsed from the text
+  add -clip                     Add event, AI-parsed from clipboard text or image
+  add                           Add event interactively
+      add options:              -free / -busy  -r <dur> (reminder, repeatable)
+                                -rrule <rule> (recurring)  -open  -birthday
+  update | edit | set <id>      Change an event; only the options given change:
+                                  -when <when> -dur <dur|days> -title <text>
+                                  -loc <text> -note <text> -free / -busy
+                                  -r <dur> (add reminder) -rx <dur> (remove) -nr (none)
+  del | delete <id> [id2...]    Delete event(s) by ID prefix
+                                  -all (whole recurring series) -b (birthdays)
+  remind <id> <dur> [dur2...]   Add reminder(s) to an existing event
+  resched | reschedule <id> <when> [dur]   Reschedule; keeps duration and,
+                                  if <when> has no time, the original time
+  snooze <id> [when]            Reschedule, default +1d
+  import <file.ics>             Import events from ICS file
   calendars | listc | list-calendars   List available calendars
   listr | list-recurring        List recurring event masters (RRULE)
   assoc                         Set up .ics file association (Windows)
@@ -289,7 +307,7 @@ Global options:
   -n <count>                    Max events to list (default 10)
   -since <date> / -till <date>  Time window. Commands that look up an event
                                 by ID search 30 days back; -since widens that.
-  -b, -birthday                 Birthdays: include them in list/del; on add, create one
+  -b, -birthday                 Birthdays: include them in list/del; on add, point at the contact
   -v                            Verbose output
   -h, -help                     Show help;  -version  show version
 
@@ -339,11 +357,14 @@ const USAGE = {
 
   -allday         Create an all-day event. The third arg is a day count
                   (default 1); the event spans that many days.
-  -birthday       Create a Google birthday event (all-day, repeats yearly,
-                  shows as free, filed under Google's Birthdays layer). Only
-                  the title, the date and -r reminders apply; no duration,
-                  -rrule, -busy, location or note. In AI mode the text
-                  saying "birthday" does the same thing. (alias: -b)
+  -birthday       A birthday belongs on the person's Google Contact, not
+                  on the calendar: prints the date to enter and a clickable
+                  Google Contacts search URL for the name (the first arg;
+                  "<name>'s birthday" also works). -open opens it. Nothing
+                  is written. A 4-digit year in the date is shown as the
+                  birth year. No duration, -r, -rrule, -busy, -cal, location
+                  or note. In AI mode the text saying "birthday" does the
+                  same thing. (alias: -b)
   -free           Mark the event as Free (does not block time / not busy).
   -busy           Mark the event as Busy (the default). In AI mode the text
                   can also say it ("free", "tentative", "optional", "FYI").
@@ -368,8 +389,8 @@ const USAGE = {
     gcal add "Vacation" "jul 1" -allday              (1 day, all-day)
     gcal add "Conference" "jul 1" 3 -allday          (3-day all-day event)
     gcal add "Out of office" "jul 1" -allday -free   (all-day, not busy)
-    gcal add "Ann's birthday" "mar 5" -birthday      (yearly birthday)
-    gcal add "Ann's birthday is March 5"             (AI mode, same result)
+    gcal add "Ann Smith" "mar 5 1950" -birthday      (URL to Ann's contact)
+    gcal add "Ann Smith's birthday is March 5"       (AI mode, same result)
     gcal add "Dentist appointment Friday 3pm for 1 hour"
     gcal add -clip                                  (text, or image if none)
     gcal add "Dentist" "Friday 3pm" -r 30m
@@ -406,7 +427,8 @@ const USAGE = {
        gcal delete <id> [id2...]
   Delete event(s) by ID prefix. Searches up to 30 days back; widen with -since.
   -all            Delete entire recurring series (not just instance)
-  -b, -birthday   Allow deletion of birthday events
+  -b, -birthday   Allow deletion of birthday events (ones that come from a
+                  contact cannot be deleted here; the contact's URL is printed)
 `,
     delete: `gcal delete <id> [id2...] [-all]
   Alias for "del".
@@ -684,54 +706,58 @@ function buildReminders(minutes) {
         overrides: minutes.map(m => ({ method: 'popup', minutes: m }))
     };
 }
-// 2026-09-21 — Claude Code (Fable 5.1), at Bob's direction: birthdays used to be
-// ordinary events with "birthday" in the title. Google has a real event type for
-// them, which files the event under its Birthdays layer and repeats it yearly.
-// The API's rules for eventType 'birthday' (event-types guide, read 2026-09-21):
-// all-day spanning exactly one day, RRULE:FREQ=YEARLY (Feb 29 needs
-// BYMONTH=2;BYMONTHDAY=-1), visibility private, transparency transparent,
-// birthdayProperties.type 'birthday', and no other properties except colorId,
-// summary and reminders. Both add modes build the event through this one function.
+// 2026-09-22 — Claude Code (Fable 5.1), at Bob's direction. The 2026-09-21 version
+// created a standalone Calendar event with eventType 'birthday'. Bob: that is the
+// wrong place — a birthday belongs on the person's Google Contact, and Calendar
+// shows contact birthdays in its Birthdays layer by itself. He has very few
+// birthdays to enter, so rather than a People API write (built and then dropped
+// the same day), -birthday just says so and prints a clickable Google Contacts
+// search URL for the name; the birthday is added there by hand. URL forms
+// verified 2026-09-22: /search/<name> lists matches with an Edit button each;
+// /person/<id> shows the contact with "Add birthday" on it; /person/<id>/edit 404s.
+const CONTACTS_SEARCH_URL = 'https://contacts.google.com/search/';
+const CONTACTS_PERSON_URL = 'https://contacts.google.com/person/';
+/** "Ann Smith's birthday" / "Ann Smith birthday" → "Ann Smith". */
+function personNameFromBirthdayText(text) {
+    return text.replace(/(['’]s)?\s+birthday\b.*$/i, '').trim();
+}
+/** Human-readable birthday, e.g. "March 5, 1950" or "March 5". */
+function formatBirthday(date) {
+    const monthDay = new Date(2000, date.month - 1, date.day)
+        .toLocaleDateString('en-US', { month: 'long', day: 'numeric' });
+    return date.year ? `${monthDay}, ${date.year}` : monthDay;
+}
 /**
- * Build a Google birthday event for the given calendar day.
- * @param title - Event summary, e.g. "Ann's birthday"
- * @param day - The birthday (local date; the year is kept, so a birth year gives the first occurrence)
- * @param reminderMinutes - Popup reminders, minutes before the (all-day) start
+ * Point at Google Contacts for entering a birthday: prints what to enter and a
+ * clickable search URL for the person. Nothing is written anywhere.
+ * @param nameText - the person's name, or "<name>'s birthday" (the suffix is stripped)
+ * @param date - month/day, plus year when the birth year is known
+ * @param open - also open the URL in the browser (-open)
  */
-function makeBirthdayEvent(title, day, reminderMinutes) {
-    const startD = new Date(day);
-    startD.setHours(0, 0, 0, 0);
-    const endD = new Date(startD);
-    endD.setDate(endD.getDate() + 1); // end.date is exclusive
-    const isLeapDay = startD.getMonth() === 1 && startD.getDate() === 29;
-    return {
-        summary: title,
-        eventType: 'birthday',
-        birthdayProperties: { type: 'birthday' },
-        start: { date: formatYMD(startD) },
-        end: { date: formatYMD(endD) },
-        recurrence: [isLeapDay ? 'RRULE:FREQ=YEARLY;BYMONTH=2;BYMONTHDAY=-1' : 'RRULE:FREQ=YEARLY'],
-        visibility: 'private',
-        transparency: 'transparent',
-        reminders: buildReminders(reminderMinutes)
-    };
+function pointToContactsForBirthday(nameText, date, open) {
+    const name = personNameFromBirthdayText(nameText);
+    if (!name) {
+        console.error(`Cannot tell whose birthday this is from "${nameText}".`);
+        process.exit(1);
+    }
+    const url = CONTACTS_SEARCH_URL + encodeURIComponent(name);
+    console.log(`\nBirthdays live on the contact, not the calendar. Add ${formatBirthday(date)} to ${name} in Google Contacts:`);
+    console.log(`  ${url}`);
+    console.log('Google Calendar then shows it in its Birthdays layer.');
+    if (open)
+        openUrl(url);
 }
-/** Print the result of creating a birthday event (shared by explicit and AI add). */
-function reportCreatedBirthday(created, open) {
-    console.log(`\nBirthday created: ${created.summary}`);
-    console.log(`  When: ${formatDateTime(created.start)}, every year (Google Birthdays)`);
-    if (created.htmlLink)
-        console.log(`  Link: ${created.htmlLink}`);
-    if (open && created.htmlLink)
-        openUrl(created.htmlLink);
-}
-/** Options that a birthday event cannot carry; -birthday with any of these is an error. */
+/** Options that mean nothing for a contact birthday; -birthday with any of these is an error. */
 function rejectBirthdayConflicts(parsed) {
     const bad = [];
     if (parsed.rrule)
         bad.push('-rrule (birthdays always repeat yearly)');
     if (parsed.transparency === 'opaque')
         bad.push('-busy (Google shows birthdays as free)');
+    if (parsed.reminders.length)
+        bad.push('-r (reminders for contact birthdays are set in Google Calendar\'s Birthdays settings)');
+    if (parsed.calendar !== 'primary')
+        bad.push('-cal (a birthday goes on the contact, not a calendar)');
     if (parsed.setLoc !== undefined)
         bad.push('-loc');
     if (parsed.setNote !== undefined)
@@ -1171,17 +1197,21 @@ async function main() {
                     console.error('Specify either a time range or a [duration], not both.');
                     process.exit(1);
                 }
-                // 2026-09-21 — Claude Code (Fable 5.1), at Bob's direction: -birthday
-                // makes a Google birthday event. No conflict check: it is all-day and free.
+                // 2026-09-22 — Claude Code (Fable 5.1), at Bob's direction: -birthday
+                // points at the person's Google Contact instead of writing the calendar.
+                // The birth year is shown only when the date text actually contains one;
+                // otherwise parseDateTimeRange has filled in the current/next year.
                 if (parsed.birthdays) {
                     rejectBirthdayConflicts(parsed);
                     if (rangeEnd || (third && third !== '1')) {
-                        console.error('A birthday is a single day: give just <title> <date>.');
+                        console.error('A birthday is a single day: give just <name> <date>.');
                         process.exit(1);
                     }
-                    const token = await getAccessToken(user, true);
-                    const created = await createEvent(token, makeBirthdayEvent(title, startTime, parsed.reminders), parsed.calendar);
-                    reportCreatedBirthday(created, parsed.open);
+                    const yearGiven = /\b\d{4}\b/.test(when);
+                    const date = { month: startTime.getMonth() + 1, day: startTime.getDate() };
+                    if (yearGiven)
+                        date.year = startTime.getFullYear();
+                    pointToContactsForBirthday(title, date, parsed.open);
                     break;
                 }
                 const event = {
@@ -1303,6 +1333,7 @@ async function main() {
             const token = await getAccessToken(user, true);
             const events = [];
             let busyConflicts = 0;
+            let birthdaysDone = 0; // 2026-09-22: birthdays are pointed at Contacts, not put into events[]
             for (const extracted of extractedEvents) {
                 const tz = extracted.timeZone || localTz;
                 const startDt = extracted.startDateTime;
@@ -1310,15 +1341,20 @@ async function main() {
                     console.error(`AI returned invalid date: ${startDt} — skipping`);
                     continue;
                 }
-                // 2026-09-21 — Claude Code (Fable 5.1), at Bob's direction: -birthday, or
-                // the text itself being a birthday, makes a Google birthday event from the
-                // date part alone. Skips the conflict check (all-day, free).
+                // 2026-09-22 — Claude Code (Fable 5.1), at Bob's direction: -birthday, or
+                // the text itself being a birthday, points at the person's Google Contact
+                // instead of making a calendar event, so it is handled right away rather
+                // than queued with the events below. The prompt asks for the birth year when the text
+                // gives one and the next occurrence otherwise, so a date before today
+                // means the year is real.
                 if (parsed.birthdays || extracted.birthday) {
                     const [y, m, d] = startDt.slice(0, 10).split('-').map(Number);
-                    const bday = makeBirthdayEvent(extracted.summary, new Date(y, m - 1, d), parsed.reminders);
-                    events.push(bday);
-                    console.log(`\n  Birthday: ${extracted.summary}`);
-                    console.log(`  When:     ${formatDateTime(bday.start)}, every year`);
+                    const isPast = new Date(y, m - 1, d).getTime() < new Date().setHours(0, 0, 0, 0);
+                    const date = { month: m, day: d };
+                    if (isPast)
+                        date.year = y;
+                    pointToContactsForBirthday(extracted.summary, date, parsed.open);
+                    birthdaysDone++;
                     continue;
                 }
                 const durationMins = parseDuration(extracted.duration || '1h');
@@ -1351,6 +1387,8 @@ async function main() {
                     busyConflicts += conflicts;
             }
             if (events.length === 0) {
+                if (birthdaysDone > 0)
+                    break; // the input was birthdays only; all handled above
                 console.error('No valid events extracted');
                 process.exit(1);
             }
@@ -1390,10 +1428,6 @@ async function main() {
             }
             for (const event of events) {
                 const created = await createEvent(token, event, parsed.calendar);
-                if (created.eventType === 'birthday') {
-                    reportCreatedBirthday(created, parsed.open);
-                    continue;
-                }
                 console.log(`\nEvent created: ${created.summary}`);
                 console.log(`  When: ${formatDateTime(created.start)} - ${formatDateTime(created.end)}`);
                 if (created.htmlLink) {
@@ -1432,6 +1466,17 @@ async function main() {
                     continue;
                 }
                 const event = unique[0];
+                // 2026-09-22 — Claude Code (Fable 5.1), at Bob's direction: a birthday that
+                // Google derives from a contact cannot be deleted through the Calendar API;
+                // the contact is the source, so say where to remove it.
+                if (event.eventType === 'birthday' && event.birthdayProperties?.contact) {
+                    const contactUrl = CONTACTS_PERSON_URL + event.birthdayProperties.contact.replace(/^people\//, '');
+                    console.error(`${idPrefix}: "${event.summary}" comes from a Google Contact; remove the birthday there and the calendar entry goes with it:`);
+                    console.error(`  ${contactUrl}`);
+                    if (parsed.open)
+                        openUrl(contactUrl);
+                    continue;
+                }
                 // -all: delete entire recurring series using base ID
                 const deleteId = parsed.all ? (event.id || '').split('_')[0] : event.id;
                 await deleteEvent(token, deleteId, parsed.calendar);
