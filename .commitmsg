@@ -1,0 +1,2 @@
+- parseDateTime: a bare 3-4 digit number is HHMM time (`gcal add danielle 1015` = 10:15, rolls to tomorrow if past; 2575 is an error). Before, it fell through to `new Date("1015")`, the year 1015, and created an event on 1014-12-31. All-digit input never reaches native Date parsing now. hasTimeComponent/isTimeOnly recognize HHMM. (2026-10-19)
+- add: prints the new event's ID (8 chars, as `gcal list` shows) so it can go straight to update/del. AI-mode add also now prints "Shows as: free/busy" from the created event. (2026-11-05)

@@ -408,8 +408,9 @@ const USAGE: Record<string, string> = {
        gcal add                                Interactive (type description)
   Add a calendar event. Default duration 1h. Use -r <dur> to add reminder(s).
   <when> may be a range, e.g. "jun 13 1pm to 2:30pm" (no [duration] needed).
+  A bare time ("10:15", "2pm", or HHMM "1015") means the next time it comes up.
 
-  -allday         Create an all-day event. The third arg is a day count
+  -allday        Create an all-day event. The third arg is a day count
                   (default 1); the event spans that many days.
   -birthday       A birthday belongs on the person's Google Contact, not
                   on the calendar: prints the date to enter and a clickable
@@ -1372,6 +1373,9 @@ async function main(): Promise<void> {
                 }
                 const created = await createEvent(token, event, parsed.calendar);
                 console.log(`\nEvent created: ${created.summary}`);
+                // 2026-11-05 — Claude Code (Opus 5.5), at Bob's direction: show the ID so it can be
+                // used with update/del right away. 8 chars matches what `gcal list` shows.
+                console.log(`  ID:   ${(created.id || '').slice(0, 8)}`);
                 console.log(`  When: ${formatDateTime(created.start)} - ${formatDateTime(created.end)}`);
                 console.log(`  Shows as: ${created.transparency === 'transparent' ? 'free' : 'busy'}`);
                 if (created.htmlLink) {
@@ -1539,7 +1543,11 @@ async function main(): Promise<void> {
             for (const event of events) {
                 const created = await createEvent(token, event, parsed.calendar);
                 console.log(`\nEvent created: ${created.summary}`);
+                // 2026-11-05 — Claude Code (Opus 5.5), at Bob's direction: show the ID (as `gcal list`
+                // does) and the free/busy state as Google stored it.
+                console.log(`  ID:   ${(created.id || '').slice(0, 8)}`);
                 console.log(`  When: ${formatDateTime(created.start)} - ${formatDateTime(created.end)}`);
+                console.log(`  Shows as: ${created.transparency === 'transparent' ? 'free' : 'busy'}`);
                 if (created.htmlLink) {
                     console.log(`  Link: ${created.htmlLink}`);
                 }

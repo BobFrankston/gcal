@@ -409,6 +409,21 @@ export function parseDateTime(input: string, opts?: { preferFuture?: boolean }):
         return d;
     }
 
+    // 2026-10-19 — Claude Code (Opus 5.5), at Bob's direction.
+    // `gcal add danielle 1015` meant 10:15, but nothing matched a bare number, so it fell
+    // through to `new Date("1015")` -- the YEAR 1015 -- and created an event on 1014-12-31.
+    // A bare 3-4 digit number is now HHMM (military) time; an out-of-range one is an error.
+    const hhmmMatch = input.trim().match(/^(\d{1,2})(\d{2})$/);
+    if (hhmmMatch) {
+        const h = parseInt(hhmmMatch[1]);
+        const m = parseInt(hhmmMatch[2]);
+        if (h > 23 || m > 59) throw new Error(`Cannot parse time (HHMM): ${input}`);
+        const d = new Date(now);
+        d.setHours(h, m, 0, 0);
+        if (opts?.preferFuture && d.getTime() <= now.getTime()) d.setDate(d.getDate() + 1);
+        return d;
+    }
+
     // Handle time with am/pm (2pm, 10am, 2:30pm) - assume today
     const ampmMatch = lower.match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)$/);
     if (ampmMatch) {
@@ -422,7 +437,10 @@ export function parseDateTime(input: string, opts?: { preferFuture?: boolean }):
         return d;
     }
 
-    // Try native Date parsing
+    // Try native Date parsing.
+    // 2026-10-19 — Claude Code (Opus 5.5): never for an all-digit string -- native Date reads
+    // digits as a year (see HHMM note above), which is never what a calendar entry means.
+    if (/^\d+$/.test(input.trim())) throw new Error(`Cannot parse date/time: ${input}`);
     const parsed = new Date(input);
     if (!isNaN(parsed.getTime())) {
         return parsed;
@@ -434,7 +452,9 @@ export function parseDateTime(input: string, opts?: { preferFuture?: boolean }):
 /** True if input string contains a time-of-day component (e.g. "3pm", "15:30", "at 3") */
 export function hasTimeComponent(input: string): boolean {
     const lower = input.toLowerCase();
-    return /\d{1,2}:\d{2}/.test(lower) || /\d{1,2}\s*(am|pm)\b/.test(lower) || /\bat\s+\d/.test(lower) || /\b(noon|midnight)\b/.test(lower);
+    // 2026-10-19 — Claude Code (Opus 5.5): a bare HHMM ("1015") is a time too.
+    return /\d{1,2}:\d{2}/.test(lower) || /\d{1,2}\s*(am|pm)\b/.test(lower) || /\bat\s+\d/.test(lower) || /\b(noon|midnight)\b/.test(lower)
+        || /^\s*\d{3,4}\s*$/.test(lower);
 }
 
 /** True if input is a bare time of day with no date (e.g. "2:30pm", "14:30", "noon") */
@@ -442,7 +462,8 @@ function isTimeOnly(input: string): boolean {
     const lower = input.toLowerCase().trim()
         .replace(/\bnoon\b/g, '12pm')
         .replace(/\bmidnight\b/g, '12am');
-    return /^(\d{1,2})(?::(\d{2}))?\s*(am|pm)$/.test(lower) || /^(\d{1,2}):(\d{2})$/.test(lower);
+    // 2026-10-19 — Claude Code (Opus 5.5): bare HHMM ("1015") counts as time-only.
+    return /^(\d{1,2})(?::(\d{2}))?\s*(am|pm)$/.test(lower) || /^(\d{1,2}):(\d{2})$/.test(lower) || /^\d{3,4}$/.test(lower);
 }
 
 /** Parse a single date/time or a date/time range like "june 13 1pm to 2:30pm".
